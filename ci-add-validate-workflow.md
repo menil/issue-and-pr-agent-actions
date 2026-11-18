@@ -21,13 +21,21 @@ without fixing this would have failed on its first run.
   environment, so neither could import it. Fixed in `shell.nix` with a single
   `python3.withPackages [pytest mypy]` environment. A comment records the
   reason so nobody "simplifies" it back.
+- **nixpkgs pinned in `shell.nix`** (revision + sha256 via `fetchTarball`).
+  The first CI run failed with 44 lint errors: CI installed ruff 0.17.4 from
+  the floating `nixos-unstable` channel while local development had 0.15.13,
+  and the newer ruff enables many more rules by default (the repo has no ruff
+  config). The pin uses the revision local development already used and
+  passes with, so CI and local run identical tool versions. The workflow no
+  longer sets `nix_path`, because `shell.nix` no longer reads `<nixpkgs>`.
+  This also closes the reproducibility part of bead c8a.
 - **Least privilege:** `permissions: contents: read`, `pull_request` trigger
   (never `pull_request_target`), no secrets, so fork PRs are safe.
 - **Concurrency and timeout:** superseded PR runs are cancelled; pushes to
   main use the commit SHA as their group so none is cancelled or replaced in
   the queue. `timeout-minutes: 15` replaces the 6-hour default.
-- **One commit:** the shell.nix fix is a prerequisite for the workflow to
-  pass, so splitting would leave a red commit.
+- **One commit:** the shell.nix fix and pin are prerequisites for the
+  workflow to pass, so splitting would leave a red commit.
 
 ## Alternatives Considered & Rejected
 - **`ignore_missing_imports` or `--python-executable` in mypy config:**
@@ -36,14 +44,18 @@ without fixing this would have failed on its first run.
 - **`actions/setup-python` + `pip install` instead of Nix:** a few lines
   shorter and faster, but creates a second environment that can drift from the
   documented local flow, and leaves local `just validate` broken.
-- **Pinning nixpkgs in this change:** deferred. Floating `nixos-unstable`
-  can cause drift-induced failures and a Python version different from the
-  action's 3.11 runtime. Tracked by existing bead c8a; kept out to keep this
-  change small.
+- **Pinning ruff rules in `pyproject.toml` instead of nixpkgs:** a smaller
+  change, but ruff, mypy and python versions would still drift. Pinning the
+  whole toolchain fixes the cause rather than one symptom.
+- **Adopting the newer ruff's defaults and fixing the 44 findings:** a larger
+  change to src and tests that is unrelated to CI plumbing; better done
+  deliberately in its own PR.
 - **Pinning third-party actions by SHA:** deferred; matches repo convention
   and Dependabot already bumps them.
 
 ## Known follow-ups
-Pin nixpkgs and align the Python version with the action's 3.11; extend lint
-scope to `src/` and `action.yml` (actionlint); mark the check as required in
-repo settings once the pin lands.
+Align the Python version with the action's 3.11 runtime; extend lint scope to
+`src/` and `action.yml` (actionlint); mark the check as required in repo
+settings now that the pin is in; add a way to bump the pin (Dependabot has no
+plain-nix ecosystem for `fetchTarball`, so a flake.lock or npins would let it
+be automated).
