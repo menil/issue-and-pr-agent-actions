@@ -144,6 +144,8 @@ nix-shell
 just validate
 ```
 
+The output-safety tests render sanitized text with `cmark-gfm`, which the nix shell provides. Outside the shell they are skipped locally, and they fail in CI (`CI` set) if it is missing.
+
 If you use [direnv](https://direnv.net/), the checked-in `.envrc` loads the
 nix shell automatically when you enter the directory:
 
