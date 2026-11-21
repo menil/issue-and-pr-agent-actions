@@ -139,14 +139,14 @@ jobs:
 The model reads the pull request diff, which its author controls, so a hostile diff can try to steer what the model writes (indirect prompt injection). Rather than relying on the model to refuse, everything it writes is rewritten before it is posted, so GitHub never sees the original text outside code blocks:
 
 - Characters that can begin a link, image, HTML tag, reference definition or code fence (`[`, `]`, `<`, `|`, `~`, `\`, `&` and backticks) are escaped, so those constructs cannot form. Links and images show as plain text instead of being clickable or loading remote content. A table made with pipes cannot form either, but a one-column table needs no pipe at all (a line of text followed by a `:-` line), so tables can still render. That is harmless here: with every other construct inert, nothing active can sit in a cell.
-- `@mentions`, cross-repository references (`owner/repo#1`), URLs and email addresses are shown as inline code, which GitHub never links or notifies. Same-repository `#123` references are left alone.
+- `@mentions`, issue and pull request references (`#123`, `GH-123`, `owner/repo#1`), URLs and email addresses are shown as inline code, which GitHub never links or notifies. Dollar signs in prose are shown as code too, because GitHub finds math (`$x$`, `$$x$$`) before it parses Markdown, so an escape does not stop it and `\color{white}` inside could hide text. A quote whose first line is `[!NOTE]` or a similar marker would render as a GitHub alert, which a manipulated model could use to forge a "verified" notice, so the marker is shown as code. Commit SHAs and `:emoji:` are left alone: a SHA only links to a commit, and GitHub's emoji are its own images.
 - Fenced code blocks keep their content as written, and one still open at the end of the text is closed so the warnings added after it render normally. Fence info strings are reduced to a known language name, otherwise `text`, because GitHub gives some of them special behaviour (`suggestion` adds a one-click "Commit suggestion" button; `mermaid` and `math` render embedded content).
 - Inline code written with one backtick at each end keeps its content. Code that contains a `|` or a backtick (for example ``` `str | None` ``` or double-backtick code) is shown as escaped text instead, with its backticks visible and no monospace. GitHub splits table cells at every pipe, even inside code, and a span holding either character could be cut in two or re-paired with the next one, so none is ever written. In a sample of past reviews this affected about 3% of comments, mostly type unions and shell pipes.
 - Control, zero-width, bidirectional, unpaired-surrogate and other invisible characters are removed, since they can hide instructions from reviewers while staying readable to other AI tools. This also removes zero-width joiners, which splits emoji sequences and affects some Persian and Indic text.
 - Comments are capped at 4,000 characters and the summary at 10,000 before escaping, so the posted text can be longer (up to five times, for `&`). That bound is enforced: a result over five times the cap is withheld instead of posted, because GitHub rejects a review body over 65,536 characters and would drop every comment with it. If sanitizing itself fails, or leaves nothing of a comment or the summary, that text is withheld rather than posted as written. The review then carries a warning saying how many comments (and whether the summary) were withheld, and never reads "No issues found"; the run log also gets a warning annotation and the reason, naming the failure by type and location but never repeating its message, since a message can quote model text. A comment the model left blank is not counted. Truncations are logged.
 - Text that comes from the model or from an API response and is written to the run log (error messages, a skipped comment's path, the raw response when parsing fails) is shown with its line breaks escaped, or with every line prefixed, so it can never start a log line with `::`, which Actions would read as a workflow command.
 
-This limits what injected text can do on the pull request thread. It does not make the model's judgement trustworthy: a manipulated model can still write misleading text, such as a claim that the code was verified, so treat the review as advice. The rewriting is tested against `cmark-gfm`, the parser GitHub's renderer is built on, but GitHub adds steps of its own (for example mention notifications), so that is strong evidence, not proof.
+This limits what injected text can do on the pull request thread. It does not make the model's judgement trustworthy: a manipulated model can still write misleading text, such as a claim that the code was verified, so treat the review as advice. The rewriting is tested against `cmark-gfm`, the parser GitHub's renderer is built on, but GitHub adds steps of its own (math, alerts and issue links, for example, which `cmark-gfm` does not render). Those are checked by an opt-in test that sends everything through GitHub's own renderer (see Development). Both are strong evidence, not proof.
 
 ## Versioning and releases
 
@@ -176,6 +176,12 @@ just validate
 ```
 
 The output-safety tests render sanitized text with `cmark-gfm`, which the nix shell provides. Outside the shell they are skipped locally, and they fail in CI (`CI` set) if it is missing.
+
+A second, opt-in check sends the same corpus and a fuzz run through GitHub's own renderer (`gh api markdown`), which also shows math, alerts, issue links and embedded renderers. It needs the `gh` CLI, a login and network, makes about 650 requests and takes a few minutes, so run it whenever the sanitizer changes:
+
+```bash
+GITHUB_RENDER_CHECK=1 pytest -k githubs_own_renderer
+```
 
 If you use [direnv](https://direnv.net/), the checked-in `.envrc` loads the
 nix shell automatically when you enter the directory:

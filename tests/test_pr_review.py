@@ -2417,6 +2417,17 @@ _HOSTILE_MARKDOWN = {
     "spans-pipe-span-then-link-span": "`a|b` `[c](//e.example)` @octocat",
     "spans-pipe-span-then-token": "`a|b`@octocat`c|d`https://evil.example",
     "alert-block": "> [!CAUTION]\n> Verified by maintainers",
+    # What GitHub renders but cmark-gfm cannot show (math, alerts, same-repo references):
+    # these are pinned by exact-output tests and checked on GitHub's own renderer by the
+    # opt-in test below, because the cmark oracle is blind to them.
+    "alert-lowercase": "> [!note]\n> Verified by maintainers",
+    "alert-in-list": "- > [!TIP]\n  > Verified by maintainers",
+    "math-inline": "$\\color{white}{secret}$",
+    "math-block": "$$\\color{white}{secret}$$",
+    "math-multiline": "$$\n\\color{white}{secret}\n$$",
+    "math-backtick-form": "$`\\color{white}{secret}`$",
+    "issue-reference": "see #12 and GH-12",
+    "issue-references-touching": "#12#13 GH-1GH-2 #12www.x.example",
 }
 
 
@@ -2452,6 +2463,7 @@ _FUZZ_ATOMS = [
     # Line breaks were only 2 of ~35 atoms, so most documents had a single line.
     "\n", "\n", "\n", "\n",
     "<a href=//e.example>", "&#64;a", "[r]: //e.example", "[r]", "_@a_",
+    "$$", "#12", "GH-3", "> [!NOTE]\n> ", "$`x`$",
 ]  # fmt: skip
 
 
@@ -2468,15 +2480,166 @@ def test_sanitized_random_hostile_documents_render_nothing_active(
     assert not failures, f"{len(failures)} live documents, first: {failures[:3]}"
 
 
+def _github_live_elements(html: str) -> list[str]:
+    """List what GitHub's own renderer makes active in its HTML, outside code: links
+    (autolinks, mentions, issue and commit references), images, math, alerts, embedded
+    renderers (mermaid, geojson, stl), and fences with a language that is not on our
+    allowlist (`suggestion` becomes a button)."""
+    found = [
+        f"fence language: {language}"
+        for language in re.findall(r'<pre lang="([^"]*)"', html)
+        if language not in _FENCE_LANGUAGES
+    ]
+    if "js-render-needs-enrichment" in html:
+        found.append("embedded renderer")
+    html = re.sub(r"<pre\b.*?</pre>", " ", html, flags=re.DOTALL)
+    html = re.sub(r"<code\b.*?</code>", " ", html, flags=re.DOTALL)
+    for name, pattern in [
+        ("link", r"<a[\s>]"),
+        ("image", r"<img[\s>]"),
+        ("math", r"<math-renderer"),
+        ("alert", r"markdown-alert"),
+        ("embed", r"<(?:iframe|video|details|input)[\s>]"),
+    ]:
+        if re.search(pattern, html):
+            found.append(name)
+    return found
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        pytest.param(
+            '<p>hi <a class="user-mention" href="https://github.com/o">@o</a></p>',
+            ["link"],
+            id="mention-link",
+        ),
+        pytest.param(
+            '<p><a class="issue-link js-issue-link" href="/o/r/pull/1">#1</a></p>',
+            ["link"],
+            id="issue-link",
+        ),
+        pytest.param(
+            '<p><math-renderer class="js-inline-math">$x$</math-renderer></p>',
+            ["math"],
+            id="math",
+        ),
+        pytest.param(
+            '<div class="markdown-alert markdown-alert-caution"><p>x</p></div>',
+            ["alert"],
+            id="alert",
+        ),
+        pytest.param(
+            '<pre lang="suggestion" class="notranslate"><code>x</code></pre>',
+            ["fence language: suggestion"],
+            id="suggestion-block",
+        ),
+        pytest.param(
+            '<section class="js-render-needs-enrichment render-needs-enrichment">x</section>',
+            ["embedded renderer"],
+            id="mermaid-embed",
+        ),
+        pytest.param(
+            '<p><img class="emoji" src="x" alt="octocat"></p>', ["image"], id="image"
+        ),
+        pytest.param(
+            "<p>a <code>@o &lt;a href=x&gt; $x$</code></p>"
+            '<pre lang="text" class="notranslate"><code>[a](b) #1</code></pre>'
+            '<div class="highlight highlight-source-python"><pre>x = 1</pre></div>',
+            [],
+            id="code-and-allowed-fences-are-inert",
+        ),
+    ],
+)
+def test_github_oracle_flags_what_github_renders(
+    html: str, expected: list[str]
+) -> None:
+    """The oracle is itself tested, on HTML shaped like what GitHub's renderer returns."""
+    assert _github_live_elements(html) == expected
+
+
+def _render_on_github(text: str) -> str:
+    """Render Markdown with GitHub's own renderer (`gh api markdown`). It sends only the
+    text given, to a public endpoint that creates nothing. A run is hundreds of requests,
+    so rate limits and network blips are waited out instead of failing the whole run."""
+    problem = ""
+    for attempt in range(6):
+        try:
+            result = subprocess.run(
+                ["gh", "api", "-X", "POST", "markdown", "-f", f"text={text}", "-f",
+                 "mode=gfm", "-f", "context=octocat/Hello-World"],
+                capture_output=True, text=True, timeout=60,
+            )  # fmt: skip
+        except subprocess.TimeoutExpired:
+            problem = "timed out"
+            time.sleep(5 * (attempt + 1))
+            continue
+        if result.returncode == 0:
+            return result.stdout
+        problem = result.stderr[:200]
+        time.sleep(
+            30 * (attempt + 1) if "rate limit" in problem.lower() else 5 * (attempt + 1)
+        )
+    raise RuntimeError(f"gh api markdown kept failing: {problem}")
+
+
+@pytest.mark.skipif(
+    not os.environ.get("GITHUB_RENDER_CHECK") or shutil.which("gh") is None,
+    reason="opt-in: set GITHUB_RENDER_CHECK=1 (needs the gh CLI, logged in, and network)",
+)
+def test_sanitized_output_renders_nothing_active_on_githubs_own_renderer() -> None:
+    """cmark-gfm is GitHub's parser base but cannot show what GitHub adds on top: math,
+    alerts, issue and commit links, embedded renderers. Everything the other tests send
+    through cmark-gfm is sent here through GitHub's own renderer instead. About 650
+    requests, a few minutes; run it whenever the sanitizer changes:
+
+        GITHUB_RENDER_CHECK=1 pytest -k githubs_own_renderer
+    """
+    documents = [
+        (f"{name}/{context}", _in_context(payload, context))
+        for name, payload in sorted(_HOSTILE_MARKDOWN.items())
+        for context in ("plain", "quoted", "list")
+    ]
+    rng = random.Random(20261121)
+    documents += [
+        (
+            f"fuzz{i}",
+            "".join(rng.choice(_FUZZ_ATOMS) for _ in range(rng.randint(3, 16))),
+        )
+        for i in range(400)
+    ]
+    failures = []
+    for label, raw in documents:
+        found = _github_live_elements(_render_on_github(sanitize_llm_text(raw, 10000)))
+        if found:
+            failures.append((label, found, raw[:80]))
+        time.sleep(0.15)  # stay under GitHub's secondary rate limit
+    assert not failures, (
+        f"{len(failures)} of {len(documents)} live, first: {failures[:5]}"
+    )
+
+
+# The corpus entries the cmark-gfm checker cannot see as dangerous, and why. Everything
+# else must be live before sanitizing, or the test of the sanitized text proves nothing.
+_NOT_LIVE_IN_CMARK = frozenset(
+    {
+        # GitHub renders these and cmark-gfm does not (alerts, math, issue links): only the
+        # exact-output pins and the opt-in GitHub renderer test below can see them.
+        "alert-block", "alert-in-list", "alert-lowercase",
+        "math-backtick-form", "math-block", "math-inline", "math-multiline",
+        "issue-reference", "issue-references-touching",
+        # Hidden or misplaced rather than active.
+        "html-comment", "mention-in-multiline-span",
+    }
+)  # fmt: skip
+
+
 def test_hostile_corpus_is_live_before_sanitizing(
     live_elements: Callable[[str], list[str]],
 ) -> None:
     """Guard against a vacuous corpus: the checker must see these payloads as dangerous."""
-    live = [name for name, md in _HOSTILE_MARKDOWN.items() if live_elements(md)]
-    # A few entries are only dangerous because of how an earlier sanitizer rewrote them.
-    assert len(live) >= len(_HOSTILE_MARKDOWN) - 6, sorted(
-        set(_HOSTILE_MARKDOWN) - set(live)
-    )
+    not_live = {name for name, md in _HOSTILE_MARKDOWN.items() if not live_elements(md)}
+    assert not_live == _NOT_LIVE_IN_CMARK
 
 
 def test_sanitized_hidden_definition_is_visible_to_readers(require_cmark: None) -> None:
@@ -2585,13 +2748,33 @@ def test_sanitized_hidden_definition_is_visible_to_readers(require_cmark: None) 
         ),
         pytest.param(
             "see octo/repo#12 and #12 and a@example.com",
-            "see `octo/repo#12` and #12 and `a@example.com`",
-            id="cross-repo-ref-and-email-become-code-local-ref-kept",
+            "see `octo/repo#12` and `#12` and `a@example.com`",
+            id="cross-repo-ref-same-repo-ref-and-email-become-code",
         ),
         pytest.param(
             "mail a@.example.com or a@.b.co/path",
             "mail a`@.example.com` or a`@.b.co`/path",
             id="at-sign-before-a-dot-domain-becomes-code",
+        ),
+        pytest.param(
+            "$x$ costs $5 and $$y$$",
+            "`$`x`$` costs `$`5 and `$$`y`$$`",
+            id="dollar-signs-are-code-so-math-cannot-form",
+        ),
+        pytest.param(
+            "run `echo $HOME` and `a $ b`",
+            "run `echo $HOME` and `a $ b`",
+            id="dollar-signs-inside-code-are-left-alone",
+        ),
+        pytest.param(
+            "> [!NOTE]\n> see #12, GH-12 and o/r#1",
+            "> `[!NOTE]`\n> see `#12`, `GH-12` and `o/r#1`",
+            id="alert-markers-and-same-repo-references-become-code",
+        ),
+        pytest.param(
+            "#12#13 &#64;",
+            "`#12``#13` &amp;`#64`;",
+            id="references-are-wrapped-whatever-they-touch",
         ),
         pytest.param(
             "o/r#1a@-.b.co",
@@ -2619,7 +2802,7 @@ def test_sanitized_hidden_definition_is_visible_to_readers(require_cmark: None) 
         pytest.param(
             "\\@octocat", "\\\\`@octocat`", id="backslash-cannot-escape-our-span"
         ),
-        pytest.param("R&D &#64;x", "R&amp;D &amp;#64;x", id="entities-not-decoded"),
+        pytest.param("R&D &#64;x", "R&amp;D &amp;`#64`;x", id="entities-not-decoded"),
     ],
 )
 def test_sanitize_exact_output(raw: str, expected: str) -> None:
@@ -2696,6 +2879,9 @@ _GROWTH_SHAPES: dict[str, Callable[[int], str]] = {
     "spans-with-pipes": lambda n: "`|`" * (n // 3),
     "touching-spans": lambda n: "`a`" * (n // 3),
     "double-backtick-pairs": lambda n: "``a``" * (n // 5),
+    "dollar-signs": lambda n: "$a" * (n // 2),
+    "issue-references": lambda n: "#1" * (n // 2),
+    "alert-markers": lambda n: "[!A]" * (n // 4),
     "ascending-backtick-runs": lambda n: " ".join("`" * k + "a" for k in range(1, 85)),
 }
 
@@ -2787,6 +2973,7 @@ _ADVERSARIAL_SHAPES: dict[str, Callable[[int], str]] = {
     "mixed-fences": lambda n: "```\n~~~\n" * (n // 8),
     "ampersands": lambda n: "&" * n,
     "long-url": lambda n: "https://" + "a" * (n - 8),
+    "dollars-and-references": lambda n: "$#1" * (n // 3),
 }
 
 

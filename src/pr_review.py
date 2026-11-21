@@ -958,6 +958,18 @@ _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 # GitHub unwrapped in two ways. The `at` alternative catches what is left: it shows the
 # `@` and everything that could continue the domain as code. The address then has no `@`
 # in its text for the autolinker to find, so it does not need to be matched as an address.
+#
+# Three things GitHub renders that a Markdown parser does not, found by sending the
+# sanitized corpus through GitHub's own renderer, each shown as code like the rest:
+# - `$`: GitHub looks for math (`$x$`, `$$x$$`, $`x`$) before it parses Markdown, so
+#   even an escaped `$` or an entity still opens it, and `\color{white}` inside would hide
+#   text. Math is not rendered inside code, so every run of `$` becomes its own span.
+# - `[!NOTE]` and its relatives: GitHub makes a quote whose first line is one an alert,
+#   after unescaping, so the escape on `[` does not stop a forged "Verified" alert.
+# - `#12` and `GH-12`: links to an issue or pull request of the same repository (the
+#   cross-repository form is the xref pattern). GitHub does not link one that touches a
+#   letter or digit, but wrapping its neighbour in code changes what it touches (`#12#13`
+#   leaves `#13` linked once `#12` is code), so no boundary rule is safe: wrap them all.
 _PROSE_TOKEN_RE = re.compile(
     r"(?P<span>`[^`]+`)"
     r"|(?P<url>(?:https?://|ftp://|www\.|mailto:|xmpp:)[^\s<>`|]+)"
@@ -965,6 +977,9 @@ _PROSE_TOKEN_RE = re.compile(
     r"|(?P<xref>[A-Za-z0-9_.-]{1,39}/[A-Za-z0-9_.-]{1,100}#\d+)"
     r"|(?P<mention>@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9_.-]+)?)"
     r"|(?P<at>@[\w.-]+)"
+    r"|(?P<alert>\[![A-Za-z]+\])"
+    r"|(?P<ref>(?:#|GH-)[0-9]+)"
+    r"|(?P<dollar>\$+)"
     r"|(?P<char>[\\`~&<\[\]|])",
     re.IGNORECASE,
 )
