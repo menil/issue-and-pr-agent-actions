@@ -12,6 +12,7 @@ import random
 import re
 import sys
 import time
+import traceback
 import unicodedata
 from typing import Any
 import urllib.error
@@ -1096,6 +1097,48 @@ def sanitize_llm_text(text: str, max_chars: int) -> str:
     return result
 
 
+def _describe_failure(error: Exception) -> str:
+    """Name a sanitizer failure for the log without repeating its message.
+
+    The text being sanitized is attacker-influenced and exception messages often quote
+    their input, so a message could put model text at the start of a log line, where a
+    leading `::` is read as a workflow command. Only our own SanitizeError, whose message
+    is built from numbers, is shown in full. Anything else gets its type and where it was
+    raised, which is what is needed to debug it.
+    """
+    if isinstance(error, SanitizeError):
+        return f"{type(error).__name__}: {error}"
+    frames = traceback.extract_tb(error.__traceback__)
+    where = f" at {frames[-1].name}:{frames[-1].lineno}" if frames else ""
+    return f"{type(error).__name__}{where}"
+
+
+def sanitize_or_drop(text: str, max_chars: int, what: str) -> str | None:
+    """Sanitize model text for posting, failing closed.
+
+    If sanitizing fails for any reason the text is dropped (None), never posted as
+    written, because the unsanitized text is exactly what must not reach the thread.
+    An empty string is different: sanitizing worked and nothing visible was left. The
+    caller treats both as withheld, but the log says which. Over-long input and failures
+    are logged so a missing comment can be explained.
+    """
+    if len(text) > max_chars:
+        # Invisible characters are removed before the cap applies, so the text may not
+        # actually be cut; say what was measured and what the limit is, nothing more.
+        print(
+            f"Long {what}: {len(text)} characters in, limit is {max_chars} once "
+            "invisible characters are removed."
+        )
+    try:
+        return sanitize_llm_text(text, max_chars)
+    except Exception as e:  # noqa: BLE001 - deliberately broad: any failure must fail closed
+        print(
+            f"Error: could not sanitize {what}; dropping it: {_describe_failure(e)}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def submit_github_review(
     repo: str, pr_number: str, token: str, summary: str, comments: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -1527,6 +1570,10 @@ def main() -> None:
 
     print(f"Filtering {len(llm_comments)} suggested comments against modified lines...")
     valid_comments = []
+    # Comments the model wrote that were dropped because sanitizing failed or left nothing
+    # (one it left blank is no loss and is not counted). The review says so, otherwise a
+    # dropped comment looks like a clean result.
+    withheld_comments = 0
     for comment in llm_comments:
         if not isinstance(comment, dict):
             continue
@@ -1551,17 +1598,34 @@ def main() -> None:
         norm_path = norm_path.lstrip("/")
 
         # Enforce that the path exists in our diff and the line number is part of the changed chunk
-        if norm_path in modified_lines and line_int in modified_lines[norm_path]:
-            valid_comments.append(
-                {
-                    "path": norm_path,
-                    "line": line_int,
-                    "side": "RIGHT",
-                    "body": body,
-                }
-            )
-        else:
+        if norm_path not in modified_lines or line_int not in modified_lines[norm_path]:
             print(f"Skipped comment targeting unchanged line: {path}:{line}")
+            continue
+
+        # The body is model output steered by the (untrusted) diff, so it is made safe
+        # before it can reach the pull request thread.
+        raw_body = body
+        body = sanitize_or_drop(
+            raw_body, MAX_COMMENT_CHARS, f"comment on {norm_path}:{line_int}"
+        )
+        if not body:
+            # A comment the model left blank is not a loss; anything else is.
+            if raw_body.strip():
+                withheld_comments += 1
+                reason = "sanitizing failed" if body is None else "nothing left"
+                print(f"Withheld comment on {norm_path}:{line_int}: {reason}.")
+            continue
+
+        valid_comments.append(
+            {
+                "path": norm_path,
+                "line": line_int,
+                "side": "RIGHT",
+                "body": body,
+            }
+        )
+
+    summary_withheld = False
 
     # Build the final review body depending on post_summary and json_parsed
     if not json_parsed:
@@ -1576,16 +1640,47 @@ def main() -> None:
     elif not post_summary:
         if valid_comments:
             final_body = f"Automated code review completed. Posted {len(valid_comments)} inline comment(s) on specific lines."
+        elif withheld_comments:
+            # The notice below explains why there is nothing to read; "no issues" would
+            # be wrong.
+            final_body = "Automated code review completed."
         else:
             final_body = "Automated code review completed. No issues found."
     else:
-        final_body = summary
+        safe_summary = sanitize_or_drop(summary, MAX_SUMMARY_CHARS, "summary")
+        summary_withheld = not safe_summary and bool(summary.strip())
+        if summary_withheld:
+            reason = "sanitizing failed" if safe_summary is None else "nothing left"
+            print(f"Withheld summary: {reason}.")
+        # A review with neither a body nor comments is rejected by GitHub, so fall back
+        # to a neutral line if there is nothing to post.
+        final_body = safe_summary or "Automated code review completed."
 
     if is_truncated and post_summary:
         final_body += (
             "\n\n> [!WARNING]\n> **Note**: The pull request diff was truncated "
             "because it exceeded the size limit (500KB). Some changes or files "
             "might not have been fully reviewed."
+        )
+
+    notices = []
+    if withheld_comments:
+        notices.append(
+            f"{withheld_comments} review comment(s) were withheld because they could "
+            "not be made safe to post. See the workflow log for details."
+        )
+    if summary_withheld:
+        notices.append(
+            "The review summary was withheld because it could not be made safe to "
+            "post. See the workflow log for details."
+        )
+    if notices:
+        final_body += "\n\n> [!WARNING]\n" + "\n".join(f"> {n}" for n in notices)
+        # Static text and numbers only: model text must never be printed where a line
+        # could start with "::" and be read as a workflow command.
+        print(
+            f"::warning::Review output was withheld ({withheld_comments} comment(s), "
+            f"summary withheld: {'yes' if summary_withheld else 'no'}). See the log."
         )
 
     # Always submit a review so the user receives the status and summary feedback
