@@ -31,13 +31,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Review Action
-        uses: menil/pr-code-review-action@main
+        uses: menil/pr-code-review-action@v1
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
-> [!TIP]
-> Pin to a specific commit SHA rather than `@main` for stability.
+> [!IMPORTANT]
+> The action runs with your secrets, so do not reference `@main`: whatever is pushed there would run in your repositories at once. `@v1` is the floating major tag and only moves to compatible releases. For a fixed version use an exact release (`@v1.0.0`), or a full commit SHA to pin it completely. See [Versioning and releases](#versioning-and-releases).
 
 ### Using Anthropic (Claude) instead of OpenRouter
 Set `provider: anthropic` and supply credentials using **one** of the two methods below. OpenRouter is not involved in either case.
@@ -46,7 +46,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/pr-code-review-action@main
+        uses: menil/pr-code-review-action@v1
         with:
           provider: anthropic
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -57,7 +57,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/pr-code-review-action@main
+        uses: menil/pr-code-review-action@v1
         with:
           provider: anthropic
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -71,7 +71,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/pr-code-review-action@main
+        uses: menil/pr-code-review-action@v1
         with:
           provider: auto   # default; optional
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -147,6 +147,23 @@ The model reads the pull request diff, which its author controls, so a hostile d
 - Text that comes from the model or from an API response and is written to the run log (error messages, a skipped comment's path, the raw response when parsing fails) is shown with its line breaks escaped, or with every line prefixed, so it can never start a log line with `::`, which Actions would read as a workflow command.
 
 This limits what injected text can do on the pull request thread. It does not make the model's judgement trustworthy: a manipulated model can still write misleading text, such as a claim that the code was verified, so treat the review as advice. The rewriting is tested against `cmark-gfm`, the parser GitHub's renderer is built on, but GitHub adds steps of its own (for example mention notifications), so that is strong evidence, not proof.
+
+## Versioning and releases
+
+Releases follow [semantic versioning](https://semver.org/). Each release has an immutable tag (`v1.2.3`), and the floating major tag (`v1`) points at the latest `v1.x.y`.
+
+- A new major version is needed to remove or rename an input, to require a new secret or permission, or to change the exit code behaviour.
+- Changes to what a posted review looks like, such as the escaping rules described under [Output safety](#output-safety), are not breaking, but the release notes list them.
+
+To cut a release, from an up-to-date `main`:
+
+```bash
+git tag -a v1.0.1 -m "v1.0.1"
+git tag -fa v1 -m "v1.0.1"        # move the floating major tag
+git push origin v1.0.1
+git push --force origin v1
+gh release create v1.0.1 --generate-notes
+```
 
 ## Development
 
