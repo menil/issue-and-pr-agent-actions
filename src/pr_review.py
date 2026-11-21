@@ -208,7 +208,9 @@ def filter_diff(diff_text: str, exclude_regexes: list[re.Pattern[str]]) -> str:
 
             if file_path and any(rx.search(file_path) for rx in exclude_regexes):
                 current_file_excluded = True
-                print(f"Skipping diff section for excluded file: {file_path}")
+                print(
+                    f"Skipping diff section for excluded file: {_log_text(file_path)}"
+                )
             else:
                 current_file_excluded = False
 
@@ -490,6 +492,27 @@ def truncate_diff(diff_content: str, limit: int = 500000) -> str:
     return diff_content
 
 
+def _log_text(value: object) -> str:
+    """Render text that did not come from this program as one inert line for the log.
+
+    GitHub Actions reads a log line that starts with `::` as a workflow command, and
+    exception messages and API responses quote what the model, or a server answering
+    for it, wrote: a message such as "x\\n::stop-commands::..." would otherwise put a
+    command at the start of a line of its own. Escaping every line break keeps whatever
+    the text says on the line of the fixed message around it, where it is only text.
+    """
+    return repr(str(value))[1:-1]
+
+
+def _log_block(text: str) -> str:
+    """Render multi-line text for the log, with a prefix on every line.
+
+    The prefix stops any line from starting with `::`. It is not whitespace, because the
+    runner ignores leading whitespace before it looks for a command.
+    """
+    return "\n".join(f"| {line}" for line in text.splitlines())
+
+
 def _calculate_backoff(
     attempt: int, base_delay: float, retry_after: str | float | int | None = None
 ) -> float:
@@ -694,7 +717,7 @@ def _send_request(
             if attempt < max_retries:
                 delay = _calculate_backoff(attempt, base_delay)
                 print(
-                    f"API request network/timeout error: {e}. Retrying in {delay:.2f} seconds...",
+                    f"API request network/timeout error: {_log_text(e)}. Retrying in {delay:.2f} seconds...",
                     file=sys.stderr,
                 )
                 time.sleep(delay)
@@ -778,7 +801,7 @@ def make_openrouter_request(
         )
         if is_json_error:
             print(
-                f"Warning: JSON-mode request failed: {e}. Retrying without strict JSON format constraint...",
+                f"Warning: JSON-mode request failed: {_log_text(e)}. Retrying without strict JSON format constraint...",
                 file=sys.stderr,
             )
             payload_fallback = payload.copy()
@@ -790,7 +813,7 @@ def make_openrouter_request(
                 return _send_request(base_url, payload_fallback, headers)
             except Exception as fallback_err:
                 print(
-                    f"Error: Fallback request also failed: {fallback_err}",
+                    f"Error: Fallback request also failed: {_log_text(fallback_err)}",
                     file=sys.stderr,
                 )
                 raise fallback_err
@@ -1169,11 +1192,13 @@ def submit_github_review(
             return result
     except urllib.error.HTTPError as e:
         print(
-            f"GitHub HTTP Error {e.code}: {e.read().decode('utf-8')}", file=sys.stderr
+            f"GitHub HTTP Error {e.code}: "
+            f"{_log_text(e.read().decode('utf-8', errors='replace'))}",
+            file=sys.stderr,
         )
         raise
     except Exception as e:
-        print(f"GitHub Error: {e}", file=sys.stderr)
+        print(f"GitHub Error: {_log_text(e)}", file=sys.stderr)
         raise
 
 
@@ -1513,7 +1538,7 @@ def main() -> None:
                     if has_fallback:
                         print(
                             f"Warning: Provider '{config.name}' ({config.auth_desc}) failed with "
-                            f"token/server error: {e}. Falling back to '{next_provider_name}'...",
+                            f"token/server error: {_log_text(e)}. Falling back to '{next_provider_name}'...",
                             file=sys.stderr,
                         )
                         should_fallback = True
@@ -1521,13 +1546,14 @@ def main() -> None:
                     else:
                         print(
                             f"Warning: Provider '{config.name}' ({config.auth_desc}) failed with "
-                            f"token/server error: {e}. No fallback provider available.",
+                            f"token/server error: {_log_text(e)}. No fallback provider available.",
                             file=sys.stderr,
                         )
                 # For non-token/non-500 errors or when no fallback is configured, retry if attempts remain
                 if attempt < max_review_attempts:
                     print(
-                        f"Warning: Review attempt {attempt} failed (error or malformed JSON): {e}. "
+                        f"Warning: Review attempt {attempt} failed (error or malformed JSON): "
+                        f"{_log_text(e)}. "
                         "Retrying request...",
                         file=sys.stderr,
                     )
@@ -1549,7 +1575,7 @@ def main() -> None:
             llm_comments = []
     else:
         print(
-            f"Error: All {max_review_attempts} review attempts failed. Last error: {last_exception}",
+            f"Error: All {max_review_attempts} review attempts failed. Last error: {_log_text(last_exception)}",
             file=sys.stderr,
         )
         if raw_response:
@@ -1558,7 +1584,7 @@ def main() -> None:
                 file=sys.stderr,
             )
             print("--- RAW LLM RESPONSE START ---", file=sys.stderr)
-            print(raw_response, file=sys.stderr)
+            print(_log_block(raw_response), file=sys.stderr)
             print("--- RAW LLM RESPONSE END ---", file=sys.stderr)
             llm_comments = parse_markdown_comments(raw_response, modified_lines)
             summary = "Automated code review completed (JSON parsing failed, fallback comments parsed)."
@@ -1599,7 +1625,9 @@ def main() -> None:
 
         # Enforce that the path exists in our diff and the line number is part of the changed chunk
         if norm_path not in modified_lines or line_int not in modified_lines[norm_path]:
-            print(f"Skipped comment targeting unchanged line: {path}:{line}")
+            print(
+                f"Skipped comment targeting unchanged line: {_log_text(path)}:{_log_text(line)}"
+            )
             continue
 
         # The body is model output steered by the (untrusted) diff, so it is made safe

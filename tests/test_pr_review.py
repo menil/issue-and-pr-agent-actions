@@ -2812,10 +2812,23 @@ _SANITIZER_TEST_DIFF = (
 
 
 def _run_main(
-    llm_response: str, *, post_summary: str = "true", expect_exit: bool = False
+    llm_response: str | Exception,
+    *,
+    post_summary: str = "true",
+    expect_exit: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Run main() against a canned model response and return the posted (body, comments)."""
+    """Run main() against a canned model response and return the posted (body, comments).
+
+    An exception stands for the provider call failing every time, which ends the run
+    before anything is posted.
+    """
     from pr_review import main
+
+    provider_result: dict[str, Any] = (
+        {"side_effect": llm_response}
+        if isinstance(llm_response, Exception)
+        else {"return_value": llm_response}
+    )
 
     env = {
         "OPENROUTER_API_KEY": "fake_key",
@@ -2832,7 +2845,7 @@ def _run_main(
         patch("time.sleep"),
         patch("os.path.exists", return_value=True),
         patch("builtins.open") as mock_open,
-        patch("pr_review.make_openrouter_request", return_value=llm_response),
+        patch("pr_review.make_openrouter_request", **provider_result),
         # A tripwire, not a fake: if provider selection ever reaches Anthropic, fail
         # loudly instead of making a network call.
         patch(
@@ -2852,6 +2865,9 @@ def _run_main(
             main()
     # An AssertionError from the tripwire could be swallowed by main(), so check the call.
     mock_anthropic.assert_not_called()
+    if isinstance(llm_response, Exception):
+        mock_submit.assert_not_called()
+        return "", []
     mock_submit.assert_called_once()
     args = mock_submit.call_args[0]
     return args[3], args[4]
@@ -3024,6 +3040,110 @@ def test_a_failure_never_puts_model_text_in_the_log(
         "::warning::Review output was withheld (1 comment(s), summary withheld: yes). "
         "See the log."
     ]
+
+
+def _workflow_commands(output: str) -> list[str]:
+    """Lines the Actions runner would read as a command. It ignores leading whitespace."""
+    return [line for line in output.splitlines() if line.lstrip().startswith("::")]
+
+
+_HOSTILE_LOG_TEXT = "quoted text\n::error::pwned\r::stop-commands::token"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(_HOSTILE_LOG_TEXT, id="newline-and-carriage-return"),
+        pytest.param("a\x0bb\x0cc\x1cd\x85e\u2028f\u2029g", id="other-line-separators"),
+        pytest.param(ValueError(_HOSTILE_LOG_TEXT), id="exception"),
+        pytest.param(7, id="not-a-string"),
+    ],
+)
+def test_log_text_is_always_a_single_line(value: object) -> None:
+    from pr_review import _log_text
+
+    rendered = _log_text(value)
+    assert rendered.splitlines() == [rendered]
+    assert "\n" not in rendered and "\r" not in rendered
+
+
+def test_log_text_keeps_the_text_readable() -> None:
+    from pr_review import _log_text
+
+    assert _log_text("plain text, 'quoted' and caf\u00e9") == (
+        "plain text, 'quoted' and caf\u00e9"
+    )
+    assert _log_text("two\nlines") == "two\\nlines"
+
+
+def test_log_block_prefixes_every_line() -> None:
+    from pr_review import _log_block
+
+    block = _log_block("::error::first\n  ::error::second\r\n::third")
+    assert block.splitlines() == [
+        "| ::error::first",
+        "|   ::error::second",
+        "| ::third",
+    ]
+    assert _workflow_commands(block) == []
+
+
+def test_main_logs_a_hostile_comment_path_on_one_line(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A comment aimed at a path the diff does not have is skipped, and the model chose
+    that path, so it must not be able to start a line of the log."""
+    response = json.dumps(
+        {
+            "summary": "ok",
+            "comments": [{"path": _HOSTILE_LOG_TEXT, "line": 2, "body": "note"}],
+        }
+    )
+    _run_main(response)
+    output = capsys.readouterr()
+    assert _workflow_commands(output.out + output.err) == []
+    assert "Skipped comment targeting unchanged line" in output.out
+    assert "pwned" in output.out  # still visible in the log, just not at a line start
+
+
+def test_main_logs_a_hostile_provider_error_on_one_line(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A refusal or an API error body quotes what the model or the server wrote."""
+    _run_main(ValueError(f"OpenRouter Refusal: {_HOSTILE_LOG_TEXT}"), expect_exit=True)
+    output = capsys.readouterr()
+    assert _workflow_commands(output.out + output.err) == []
+    assert "pwned" in output.err
+
+
+def test_main_logs_a_raw_model_response_with_every_line_prefixed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When the response is not JSON, main() dumps it to the log to help debugging."""
+    _run_main("::error::pwned\n::stop-commands::token\nnot json", expect_exit=True)
+    output = capsys.readouterr()
+    assert _workflow_commands(output.out + output.err) == []
+    assert "| ::stop-commands::token" in output.err
+
+
+@patch("pr_review.urllib.request.urlopen")
+def test_submit_github_review_logs_an_error_body_on_one_line(
+    mock_urlopen: MagicMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """GitHub's error body can quote the comment it rejected."""
+    from pr_review import submit_github_review
+    import urllib.error
+
+    fp = MagicMock()
+    fp.read.return_value = _HOSTILE_LOG_TEXT.encode()
+    mock_urlopen.side_effect = urllib.error.HTTPError(
+        "http://dummy", 422, "Unprocessable", MagicMock(), fp
+    )
+    with pytest.raises(urllib.error.HTTPError):
+        submit_github_review("owner/repo", "12", "fake_token", "summary", [])
+    err = capsys.readouterr().err
+    assert _workflow_commands(err) == []
+    assert "pwned" in err
 
 
 def test_main_notices_after_an_unterminated_fence_are_not_swallowed(
