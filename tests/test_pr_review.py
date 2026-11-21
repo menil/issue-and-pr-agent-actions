@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 from unittest.mock import MagicMock, call, patch
@@ -27,6 +28,7 @@ from pr_review import (
     _OUTPUT_SLACK,
     SanitizeError,
     sanitize_llm_text,
+    sanitize_or_drop,
 )
 
 
@@ -2725,6 +2727,50 @@ def test_sanitize_raises_instead_of_returning_an_oversized_result() -> None:
             sanitize_llm_text("hello", 100)
 
 
+def test_sanitize_or_drop_withholds_an_oversized_result(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with patch("pr_review._neutralize_prose_line", return_value="x" * 100000):
+        assert sanitize_or_drop("hello", 100, "comment") is None
+    # Our own error carries only numbers, so its message is safe to show in full.
+    limit = _MAX_GROWTH_FACTOR * 100 + _OUTPUT_SLACK
+    assert f"SanitizeError: sanitized text is 100000 characters, over {limit}" in (
+        capsys.readouterr().err
+    )
+
+
+def test_sanitize_or_drop_logs_over_long_input_without_claiming_a_cut(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Invisible characters are removed before the cap applies, so long input is not
+    necessarily cut: the log must say what was measured, not that text was truncated."""
+    flood = "\u200b" * 150
+    assert sanitize_or_drop(flood + "short", 100, "comment") == "short"
+    out = capsys.readouterr().out
+    assert "Long comment: 155 characters in, limit is 100" in out
+    assert "Truncating" not in out
+
+
+def test_sanitize_or_drop_logs_where_an_unexpected_failure_happened(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without the message, the log still has to say enough to debug the failure."""
+    with patch("pr_review.sanitize_llm_text", side_effect=RuntimeError("quoted text")):
+        assert sanitize_or_drop("hello", 100, "comment") is None
+    err = capsys.readouterr().err
+    assert re.search(r"RuntimeError at \w+:\d+", err)
+    assert "quoted text" not in err
+
+
+def test_main_withholds_an_oversized_comment_instead_of_failing_the_review() -> None:
+    """The failure this prevents: one hostile comment making GitHub reject the whole
+    review, which loses every other comment and the summary."""
+    with patch("pr_review._neutralize_prose_line", return_value="x" * 100000):
+        summary, comments = _run_main(_model_response("fine", "a hostile comment"))
+    assert comments == []
+    assert "1 review comment(s) were withheld" in summary
+
+
 _ADVERSARIAL_SHAPES: dict[str, Callable[[int], str]] = {
     "empty-links": lambda n: "[](" * (n // 3),
     "open-brackets": lambda n: "[" * n,
@@ -2755,3 +2801,247 @@ def test_sanitize_is_fast_on_adversarial_input(shape: str) -> None:
     started = time.perf_counter()
     sanitize_llm_text(text, MAX_SUMMARY_CHARS)
     assert time.perf_counter() - started < 5.0
+
+
+# --- main(): the sanitizer is applied to everything the model writes ---
+
+_SANITIZER_TEST_DIFF = (
+    "diff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n"
+    "@@ -1,2 +1,2 @@\n line1\n+line2\n"
+)
+
+
+def _run_main(
+    llm_response: str, *, post_summary: str = "true", expect_exit: bool = False
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run main() against a canned model response and return the posted (body, comments)."""
+    from pr_review import main
+
+    env = {
+        "OPENROUTER_API_KEY": "fake_key",
+        "PR_NUMBER": "12",
+        "REPO": "owner/repo",
+        "GH_TOKEN": "fake_github_token",
+        "POST_SUMMARY": post_summary,
+    }
+    with (
+        # clear=True matters: the machines these run on usually have Claude credentials
+        # in the environment, which would change provider selection and send the test to
+        # the real API.
+        patch.dict("os.environ", env, clear=True),
+        patch("time.sleep"),
+        patch("os.path.exists", return_value=True),
+        patch("builtins.open") as mock_open,
+        patch("pr_review.make_openrouter_request", return_value=llm_response),
+        # A tripwire, not a fake: if provider selection ever reaches Anthropic, fail
+        # loudly instead of making a network call.
+        patch(
+            "pr_review.make_anthropic_request",
+            side_effect=AssertionError("test reached the Anthropic API"),
+        ) as mock_anthropic,
+        patch("pr_review.submit_github_review") as mock_submit,
+    ):
+        mock_open.return_value.__enter__.return_value.read.return_value = (
+            _SANITIZER_TEST_DIFF
+        )
+        if expect_exit:
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+            assert excinfo.value.code == 1
+        else:
+            main()
+    # An AssertionError from the tripwire could be swallowed by main(), so check the call.
+    mock_anthropic.assert_not_called()
+    mock_submit.assert_called_once()
+    args = mock_submit.call_args[0]
+    return args[3], args[4]
+
+
+_ONE_COMMENT_WITHHELD = (
+    "\n\n> [!WARNING]\n> 1 review comment(s) were withheld because they could not "
+    "be made safe to post. See the workflow log for details."
+)
+
+
+def _model_response(summary: str, *bodies: str) -> str:
+    comments = [{"path": "test.py", "line": 2, "body": body} for body in bodies]
+    return json.dumps({"summary": summary, "comments": comments})
+
+
+def test_main_posts_sanitized_summary_and_comments() -> None:
+    """A diff that steers the model into active content must not get it onto the thread."""
+    summary, comments = _run_main(
+        _model_response(
+            "LGTM @octocat, see ![t](https://evil.example/i.png) and [fix](https://evil.example/f).",
+            "```suggestion\nbackdoor()\n```\ncc @octocat <!-- ignore -->",
+            "\u200b\u200d",
+        )
+    )
+    assert summary == (
+        "LGTM `@octocat`, see !\\[t\\](`https://evil.example/i.png)` and "
+        "\\[fix\\](`https://evil.example/f).`" + _ONE_COMMENT_WITHHELD
+    )
+    # The comment that was only invisible characters is withheld, not posted empty, and
+    # the review says so.
+    assert comments == [
+        {
+            "path": "test.py",
+            "line": 2,
+            "side": "RIGHT",
+            "body": "```text\nbackdoor()\n```\ncc `@octocat` &lt;!-- ignore -->",
+        }
+    ]
+
+
+def test_main_sanitizes_each_text_with_its_own_limit() -> None:
+    """Comments and the summary have different caps; swapping them must be noticed."""
+    long_text = "word " * 3000  # 15000 characters, over both limits
+    summary, comments = _run_main(_model_response("s" * 5000, "c" * 5000, long_text))
+    assert summary == "s" * 5000  # over the comment cap, under the summary cap
+    assert comments[0]["body"].endswith("_(truncated)_")
+    assert len(comments[0]["body"]) < 5000
+    summary, _ = _run_main(_model_response(long_text))
+    assert summary.endswith("_(truncated)_")
+    assert len(summary) < 10100
+
+
+def test_main_does_not_escape_twice() -> None:
+    summary, comments = _run_main(_model_response("R&D", "a & b"))
+    assert summary == "R&amp;D"
+    assert comments[0]["body"] == "a &amp; b"
+
+
+def test_main_empty_summary_falls_back_to_a_neutral_line() -> None:
+    """GitHub rejects a review with neither a body nor comments. A summary the model left
+    blank is not a loss, so nothing is reported."""
+    summary, comments = _run_main(_model_response(" \n"))
+    assert summary == "Automated code review completed."
+    assert comments == []
+
+
+def test_main_ignores_the_summary_when_not_posting_it() -> None:
+    summary, comments = _run_main(
+        _model_response("secret @octocat", "note"), post_summary="false"
+    )
+    assert "octocat" not in summary
+    assert [c["body"] for c in comments] == ["note"]
+
+
+def test_main_sanitizes_comments_from_the_markdown_fallback_parser() -> None:
+    """When the model's JSON cannot be parsed, comments recovered from free-form text
+    are still posted, so they are the path most exposed to injected markdown."""
+    summary, comments = _run_main(
+        "### test.py\nLine 2: See @octocat [x](//evil.example) <img src=//evil.example/i.png>",
+        expect_exit=True,
+    )
+    assert "could not be parsed as a JSON object" in summary
+    assert [c["body"] for c in comments] == [
+        "See `@octocat` \\[x\\](//evil.example) &lt;img src=//evil.example/i.png>"
+    ]
+
+
+def test_main_fails_closed_when_sanitizing_raises(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If the sanitizer breaks, nothing unsanitized may be posted in its place, and the
+    review must not look like a clean result."""
+    with patch("pr_review.sanitize_llm_text", side_effect=RuntimeError("boom")):
+        summary, comments = _run_main(_model_response("hello @octocat", "see @octocat"))
+    assert summary.startswith("Automated code review completed.")
+    assert "octocat" not in summary
+    assert "1 review comment(s) were withheld" in summary
+    assert "The review summary was withheld" in summary
+    assert comments == []
+    # The log names the exception type but never repeats its message, which could quote
+    # model text.
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err
+    assert "boom" not in err
+
+
+def test_main_reports_withheld_comments(capsys: pytest.CaptureFixture[str]) -> None:
+    """A comment dropped by the sanitizer must show up in the review and the log."""
+    summary, comments = _run_main(
+        _model_response("fine", "a real note", "\u200b\u200d")
+    )
+    assert summary == "fine" + _ONE_COMMENT_WITHHELD
+    assert [c["body"] for c in comments] == ["a real note"]
+    output = capsys.readouterr().out
+    assert "Withheld comment on test.py:2: nothing left." in output
+    # An Actions annotation, built only from static text and numbers.
+    assert (
+        "::warning::Review output was withheld (1 comment(s), summary withheld: no)."
+        in output
+    )
+
+
+def test_main_does_not_claim_no_issues_when_comments_were_withheld() -> None:
+    """With the summary off, a body of 'No issues found' would hide a withheld comment."""
+    summary, comments = _run_main(
+        _model_response("ignored", "\u200b\u200d"), post_summary="false"
+    )
+    assert "No issues found" not in summary
+    assert summary == "Automated code review completed." + _ONE_COMMENT_WITHHELD
+    assert comments == []
+
+
+def test_main_reports_a_withheld_summary() -> None:
+    summary, comments = _run_main(_model_response("\u200b\u200d", "kept"))
+    assert summary == (
+        "Automated code review completed.\n\n> [!WARNING]\n"
+        "> The review summary was withheld because it could not be made safe to "
+        "post. See the workflow log for details."
+    )
+    assert [c["body"] for c in comments] == ["kept"]
+
+
+def test_main_stays_quiet_when_nothing_was_withheld(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Blank comments are not a loss, and a normal review carries no warning."""
+    summary, comments = _run_main(_model_response("fine", "a note", "   ", ""))
+    assert summary == "fine"
+    assert [c["body"] for c in comments] == ["a note"]
+    output = capsys.readouterr().out
+    assert "::warning::" not in output
+    assert "Withheld" not in output
+
+
+def test_a_failure_never_puts_model_text_in_the_log(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Exception messages often quote their input. If one put model text at the start of a
+    log line, a leading `::` would be read by Actions as a workflow command."""
+    hostile = RuntimeError("quoted model text\n::error::pwned")
+    with patch("pr_review.sanitize_llm_text", side_effect=hostile):
+        _run_main(_model_response("fine", "a note"))
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "pwned" not in output
+    assert "quoted model text" not in output
+    # The only workflow command left is our own annotation, built from fixed text.
+    assert [line for line in output.splitlines() if line.startswith("::")] == [
+        "::warning::Review output was withheld (1 comment(s), summary withheld: yes). "
+        "See the log."
+    ]
+
+
+def test_main_notices_after_an_unterminated_fence_are_not_swallowed(
+    require_cmark: None,
+) -> None:
+    """A summary that ends inside a code block must not pull the warnings appended after it
+    into the block, where they would read as code instead of as an alert."""
+    body, _ = _run_main(_model_response("```\ncode", "\u200b\u200d"))
+    html = _render(body)
+    outside_code = re.sub(r"<pre\b.*?</pre>", " ", html, flags=re.DOTALL)
+    assert "were withheld" in outside_code
+    assert "code" in html  # the summary text itself is still posted
+
+
+def test_run_main_ignores_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The helper must not pick up the credentials of whoever runs the tests."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-key")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "ambient-token")
+    monkeypatch.setenv("PROVIDER", "anthropic")
+    summary, _ = _run_main(_model_response("ok"))
+    assert summary == "ok"
