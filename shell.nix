@@ -24,6 +24,9 @@ pkgs.mkShell {
   buildInputs = [
     pkgs.just
     pkgs.ruff
+    # Markdown parser GitHub's renderer is built on; the sanitizer tests render
+    # sanitized text with it to prove nothing active survives.
+    pkgs.cmark-gfm
     pythonEnv
   ];
 }
