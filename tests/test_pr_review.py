@@ -137,7 +137,7 @@ def test_truncate_diff() -> None:
 def test_send_request_success(mock_urlopen: MagicMock) -> None:
     import json
     import urllib.request
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = json.dumps(
@@ -161,7 +161,7 @@ def test_send_request_success(mock_urlopen: MagicMock) -> None:
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_empty_choices(mock_urlopen: MagicMock) -> None:
     import pytest
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = b'{"choices": []}'
@@ -174,7 +174,7 @@ def test_send_request_empty_choices(mock_urlopen: MagicMock) -> None:
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_non_string_content(mock_urlopen: MagicMock) -> None:
     import pytest
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = b'{"choices": [{"message": {"content": 123}}]}'
@@ -189,7 +189,7 @@ def test_send_request_non_string_content(mock_urlopen: MagicMock) -> None:
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_error_response(mock_urlopen: MagicMock) -> None:
     import pytest
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = (
@@ -204,7 +204,7 @@ def test_send_request_error_response(mock_urlopen: MagicMock) -> None:
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_null_content_refusal(mock_urlopen: MagicMock) -> None:
     import pytest
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = b'{"choices": [{"message": {"content": null, "refusal": "I cannot review this"}, "finish_reason": "refusal"}]}'
@@ -217,7 +217,7 @@ def test_send_request_null_content_refusal(mock_urlopen: MagicMock) -> None:
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_null_content_no_refusal(mock_urlopen: MagicMock) -> None:
     import pytest
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = b'{"choices": [{"message": {"content": null}}]}'
@@ -229,7 +229,7 @@ def test_send_request_null_content_no_refusal(mock_urlopen: MagicMock) -> None:
         _send_request("http://dummy", {}, {})
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_success(mock_send_request: MagicMock) -> None:
     from pr_review import make_openrouter_request
 
@@ -244,7 +244,7 @@ def test_make_openrouter_request_success(mock_send_request: MagicMock) -> None:
     assert payload["response_format"] == {"type": "json_object"}
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_comments_only(
     mock_send_request: MagicMock,
 ) -> None:
@@ -265,7 +265,7 @@ def test_make_openrouter_request_comments_only(
     assert "thinking" not in system_msg
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_fallback_success(mock_send_request: MagicMock) -> None:
     from pr_review import make_openrouter_request
 
@@ -286,7 +286,7 @@ def test_make_openrouter_request_fallback_success(mock_send_request: MagicMock) 
     assert "response_format" not in second_call_payload
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_fallback_failure(mock_send_request: MagicMock) -> None:
     import pytest
     from pr_review import make_openrouter_request
@@ -301,7 +301,7 @@ def test_make_openrouter_request_fallback_failure(mock_send_request: MagicMock) 
     assert mock_send_request.call_count == 2
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_no_fallback_on_unauthorized(
     mock_send_request: MagicMock,
 ) -> None:
@@ -315,7 +315,7 @@ def test_make_openrouter_request_no_fallback_on_unauthorized(
     assert mock_send_request.call_count == 1
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_fallback_on_value_error(
     mock_send_request: MagicMock,
 ) -> None:
@@ -496,7 +496,7 @@ def test_send_request_retry_on_429_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt raises HTTPError 429
     mock_headers = MagicMock()
@@ -533,7 +533,7 @@ def test_send_request_retry_on_429_then_success(
 def test_send_request_retry_on_network_error_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
     import urllib.error
 
     # First attempt raises URLError
@@ -559,7 +559,7 @@ def test_send_request_retry_on_network_error_then_success(
 def test_send_request_rate_limit_in_json_body_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt returns 200 OK but with error in JSON payload
     mock_res_err = MagicMock()
@@ -590,7 +590,7 @@ def test_send_request_max_retries_exhausted(
 ) -> None:
     import pytest
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # Always raise URLError
     mock_urlopen.side_effect = urllib.error.URLError("Connection timed out")
@@ -610,7 +610,7 @@ def test_send_request_stale_error_body_bug(
 ) -> None:
     import pytest
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt raises HTTPError 429 (retryable)
     mock_headers_429 = MagicMock()
@@ -642,7 +642,7 @@ def test_send_request_retry_on_503_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt raises HTTPError 503 (retryable)
     mock_headers = MagicMock()
@@ -673,7 +673,7 @@ def test_send_request_retry_after_header_only_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt raises HTTPError 429 with Retry-After header, no body metadata
     mock_headers = MagicMock()
@@ -709,7 +709,7 @@ def test_send_request_retry_after_invalid_header_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt raises HTTPError 429 with invalid Retry-After header
     mock_headers = MagicMock()
@@ -746,7 +746,7 @@ def test_send_request_http_error_exhausted(
 ) -> None:
     import pytest
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     # Always raise HTTPError 500
     mock_headers = MagicMock()
@@ -771,7 +771,7 @@ def test_send_request_http_error_exhausted(
 def test_send_request_timeout_error_then_success(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     # First attempt raises TimeoutError
     time_err = TimeoutError("Request timed out")
@@ -1211,7 +1211,7 @@ def test_parse_llm_json_preamble_extraction() -> None:
 
 def test_calculate_backoff() -> None:
     """Verify that _calculate_backoff computes delay correctly, respects retry_after, and caps at 60.0."""
-    from pr_review import _calculate_backoff
+    from llm import _calculate_backoff
 
     # 1. Exponential increase with attempts
     delay_0 = _calculate_backoff(attempt=0, base_delay=1.0)
@@ -1244,7 +1244,7 @@ def test_calculate_backoff() -> None:
     assert delay_capped_ra == 60.0
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_reasoning_exclude(
     mock_send_request: MagicMock,
 ) -> None:
@@ -1272,7 +1272,7 @@ def test_make_openrouter_request_reasoning_exclude(
     assert "reasoning" not in payload
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_openrouter_request_fallback_removes_reasoning(
     mock_send_request: MagicMock,
 ) -> None:
@@ -1346,7 +1346,7 @@ def test_parse_llm_json_truncated() -> None:
 
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_anthropic_success(mock_urlopen: MagicMock) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = json.dumps(
@@ -1370,7 +1370,7 @@ def test_send_request_anthropic_success(mock_urlopen: MagicMock) -> None:
 def test_send_request_anthropic_concatenates_text_blocks(
     mock_urlopen: MagicMock,
 ) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     # Non-text blocks (e.g. thinking) are ignored; text blocks are concatenated in order.
     mock_res = MagicMock()
@@ -1392,7 +1392,7 @@ def test_send_request_anthropic_concatenates_text_blocks(
 
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_anthropic_error_body(mock_urlopen: MagicMock) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = (
@@ -1407,7 +1407,7 @@ def test_send_request_anthropic_error_body(mock_urlopen: MagicMock) -> None:
 
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_anthropic_refusal(mock_urlopen: MagicMock) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = b'{"content": [], "stop_reason": "refusal"}'
@@ -1419,7 +1419,7 @@ def test_send_request_anthropic_refusal(mock_urlopen: MagicMock) -> None:
 
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_anthropic_empty_content(mock_urlopen: MagicMock) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = b'{"content": [], "stop_reason": "end_turn"}'
@@ -1431,7 +1431,7 @@ def test_send_request_anthropic_empty_content(mock_urlopen: MagicMock) -> None:
 
 @patch("pr_review.urllib.request.urlopen")
 def test_send_request_anthropic_no_text_block(mock_urlopen: MagicMock) -> None:
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_res = MagicMock()
     mock_res.read.return_value = (
@@ -1450,7 +1450,7 @@ def test_send_request_anthropic_http_error(
     mock_urlopen: MagicMock, mock_sleep: MagicMock
 ) -> None:
     import urllib.error
-    from pr_review import _send_request
+    from llm import _send_request
 
     mock_headers = MagicMock()
     fp = MagicMock()
@@ -1466,7 +1466,7 @@ def test_send_request_anthropic_http_error(
     assert "Anthropic HTTP Error 400: Bad Request details" in str(excinfo.value)
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_anthropic_request_success(mock_send_request: MagicMock) -> None:
     from pr_review import make_anthropic_request
 
@@ -1491,7 +1491,7 @@ def test_make_anthropic_request_success(mock_send_request: MagicMock) -> None:
     assert headers["anthropic-version"] == "2023-06-01"
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_anthropic_request_comments_only(mock_send_request: MagicMock) -> None:
     from pr_review import make_anthropic_request
 
@@ -1507,7 +1507,7 @@ def test_make_anthropic_request_comments_only(mock_send_request: MagicMock) -> N
     assert "thinking" not in system_msg
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_anthropic_request_oauth_headers(mock_send_request: MagicMock) -> None:
     """A Claude Pro/Max OAuth token authenticates via Bearer + the oauth beta header."""
     from pr_review import make_anthropic_request
@@ -1529,7 +1529,7 @@ def test_make_anthropic_request_oauth_headers(mock_send_request: MagicMock) -> N
     )
 
 
-@patch("pr_review._send_request")
+@patch("llm._send_request")
 def test_make_anthropic_request_api_key_no_oauth_beta_header(
     mock_send_request: MagicMock,
 ) -> None:
@@ -1744,7 +1744,7 @@ def test_main_missing_anthropic_key() -> None:
 def test_is_token_or_server_error() -> None:
     """Verify is_token_or_server_error accurately identifies token and server errors."""
     import urllib.error
-    from pr_review import is_token_or_server_error
+    from llm import is_token_or_server_error
 
     # HTTP status codes that represent token or server errors
     assert is_token_or_server_error(
