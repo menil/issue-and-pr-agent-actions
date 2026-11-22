@@ -21,6 +21,8 @@ from pr_review import (
     parse_markdown_comments,
     filter_diff,
     get_exclude_regexes,
+)
+from sanitize import (
     MAX_COMMENT_CHARS,
     MAX_SUMMARY_CHARS,
     _FENCE_LANGUAGES,
@@ -2908,7 +2910,7 @@ def test_the_largest_possible_review_body_fits_githubs_limit() -> None:
 
 
 def test_sanitize_raises_instead_of_returning_an_oversized_result() -> None:
-    with patch("pr_review._neutralize_prose_line", return_value="x" * 100000):
+    with patch("sanitize._neutralize_prose_line", return_value="x" * 100000):
         with pytest.raises(SanitizeError, match="over"):
             sanitize_llm_text("hello", 100)
 
@@ -2916,7 +2918,7 @@ def test_sanitize_raises_instead_of_returning_an_oversized_result() -> None:
 def test_sanitize_or_drop_withholds_an_oversized_result(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    with patch("pr_review._neutralize_prose_line", return_value="x" * 100000):
+    with patch("sanitize._neutralize_prose_line", return_value="x" * 100000):
         assert sanitize_or_drop("hello", 100, "comment") is None
     # Our own error carries only numbers, so its message is safe to show in full.
     limit = _MAX_GROWTH_FACTOR * 100 + _OUTPUT_SLACK
@@ -2941,7 +2943,7 @@ def test_sanitize_or_drop_logs_where_an_unexpected_failure_happened(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Without the message, the log still has to say enough to debug the failure."""
-    with patch("pr_review.sanitize_llm_text", side_effect=RuntimeError("quoted text")):
+    with patch("sanitize.sanitize_llm_text", side_effect=RuntimeError("quoted text")):
         assert sanitize_or_drop("hello", 100, "comment") is None
     err = capsys.readouterr().err
     assert re.search(r"RuntimeError at \w+:\d+", err)
@@ -2951,7 +2953,7 @@ def test_sanitize_or_drop_logs_where_an_unexpected_failure_happened(
 def test_main_withholds_an_oversized_comment_instead_of_failing_the_review() -> None:
     """The failure this prevents: one hostile comment making GitHub reject the whole
     review, which loses every other comment and the summary."""
-    with patch("pr_review._neutralize_prose_line", return_value="x" * 100000):
+    with patch("sanitize._neutralize_prose_line", return_value="x" * 100000):
         summary, comments = _run_main(_model_response("fine", "a hostile comment"))
     assert comments == []
     assert "1 review comment(s) were withheld" in summary
@@ -3148,7 +3150,7 @@ def test_main_fails_closed_when_sanitizing_raises(
 ) -> None:
     """If the sanitizer breaks, nothing unsanitized may be posted in its place, and the
     review must not look like a clean result."""
-    with patch("pr_review.sanitize_llm_text", side_effect=RuntimeError("boom")):
+    with patch("sanitize.sanitize_llm_text", side_effect=RuntimeError("boom")):
         summary, comments = _run_main(_model_response("hello @octocat", "see @octocat"))
     assert summary.startswith("Automated code review completed.")
     assert "octocat" not in summary
@@ -3216,7 +3218,7 @@ def test_a_failure_never_puts_model_text_in_the_log(
     """Exception messages often quote their input. If one put model text at the start of a
     log line, a leading `::` would be read by Actions as a workflow command."""
     hostile = RuntimeError("quoted model text\n::error::pwned")
-    with patch("pr_review.sanitize_llm_text", side_effect=hostile):
+    with patch("sanitize.sanitize_llm_text", side_effect=hostile):
         _run_main(_model_response("fine", "a note"))
     captured = capsys.readouterr()
     output = captured.out + captured.err
@@ -3247,26 +3249,26 @@ _HOSTILE_LOG_TEXT = "quoted text\n::error::pwned\r::stop-commands::token"
     ],
 )
 def test_log_text_is_always_a_single_line(value: object) -> None:
-    from pr_review import _log_text
+    from sanitize import log_text
 
-    rendered = _log_text(value)
+    rendered = log_text(value)
     assert rendered.splitlines() == [rendered]
     assert "\n" not in rendered and "\r" not in rendered
 
 
 def test_log_text_keeps_the_text_readable() -> None:
-    from pr_review import _log_text
+    from sanitize import log_text
 
-    assert _log_text("plain text, 'quoted' and caf\u00e9") == (
+    assert log_text("plain text, 'quoted' and caf\u00e9") == (
         "plain text, 'quoted' and caf\u00e9"
     )
-    assert _log_text("two\nlines") == "two\\nlines"
+    assert log_text("two\nlines") == "two\\nlines"
 
 
 def test_log_block_prefixes_every_line() -> None:
-    from pr_review import _log_block
+    from sanitize import log_block
 
-    block = _log_block("::error::first\n  ::error::second\r\n::third")
+    block = log_block("::error::first\n  ::error::second\r\n::third")
     assert block.splitlines() == [
         "| ::error::first",
         "|   ::error::second",
