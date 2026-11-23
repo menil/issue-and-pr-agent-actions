@@ -43,8 +43,8 @@ there are real outside issues to look at.
 ## Flow
 
 1. **Guards (no model call).** Skip if the author is a bot, the issue already has
-   `bug`, `enhancement`, `question`, `documentation`, `duplicate`, `needs-info`
-   or the opt-out label, or a comment containing our marker already exists.
+   `bug`, `enhancement`, `question`, `documentation`, `duplicate`, `needs-info`,
+   `triaged` or the opt-out label, or a comment containing our marker already exists.
 2. **Gather.** The title (cut at 300 characters) and body (cut at 6,000 characters,
    invisible characters removed), and up to 50 other issues as `#N: title` for
    duplicate candidates: the open ones, plus (proposed, see the open questions)
@@ -55,7 +55,9 @@ there are real outside issues to look at.
    issue text goes in clearly delimited and is described as untrusted data.
 4. **Validate** the answer in code against the contract below. Anything outside
    it is dropped, not repaired.
-5. **Apply**, in this order: the comment (if `needs_info`), then the labels.
+5. **Apply**, in this order: the comment (if `needs_info`), then the labels. The last
+   label is always `triaged`, so a run that got a usable answer marks the issue even
+   when there is nothing else to write.
 6. **Log** what was decided and why (`reason`, never posted).
 
 ## Model contract
@@ -84,11 +86,12 @@ there are real outside issues to look at.
 | Add `bug`, `enhancement`, `question` or `documentation` | a fixed map from `type`; skipped, never created, if the repository lacks the label |
 | Add `duplicate` | a validated `duplicate_of`; no comment, no closing |
 | Add `needs-info` | created once if missing, with a fixed description (proposed: see the open questions) |
+| Add `triaged` | after every run that got a usable answer; created once if missing, with a fixed description. It is what a person filters on (`-label:triaged`) and what stops a second run. Not added when the model gave no usable answer, so it never claims what did not happen |
 | Post one comment | a fixed template around the sanitized `missing`, ending in a hidden marker |
 
 It never closes, reopens, edits, assigns, sets a milestone or priority, applies
 `invalid`, `wontfix` or `spam`, mentions anyone, or adds any other label. At most
-3 labels and 1 comment per issue; the model's output never names a label.
+4 labels and 1 comment per issue; the model's output never names a label.
 
 ## Threat model
 

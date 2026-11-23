@@ -179,8 +179,8 @@ No checkout is needed: the issue is read from the event. It takes the same provi
 
 What it does and does not do:
 
-- It leaves an issue alone, without calling the model, if a bot opened it, if it already has a triage label (`bug`, `enhancement`, `question`, `documentation`, `duplicate`, `needs-info`) or the opt-out label, or if it has already asked its question.
-- The type and duplicate labels are added only if the repository already has them; GitHub's default labels include all five. `needs-info` is created if it is missing, and is added only together with the comment that says what is missing.
+- It leaves an issue alone, without calling the model, if a bot opened it, if it already has a triage label (`bug`, `enhancement`, `question`, `documentation`, `duplicate`, `needs-info`, `triaged`) or the opt-out label, or if it has already asked its question.
+- The type and duplicate labels are added only if the repository already has them; GitHub's default labels include all five. `needs-info` is created if it is missing, and is added only together with the comment that says what is missing. After every run that gets a usable answer from the model the issue is also marked `triaged` (created if missing), even if there was nothing else to write; that is how you list the issues not yet triaged (`-label:triaged`) and what keeps a second run from asking again. A run that fails does not add it.
 - A duplicate must be one of the issues the model was shown, and it only adds a label: the issue is never closed.
 - The comment is the one place model-written text reaches the thread. It goes through the same sanitizer as review comments, and is set in a fixed template.
 - If the model fails or answers in an unusable form, nothing is changed and the run still succeeds. Missing credentials fail the run, as in the review action.
