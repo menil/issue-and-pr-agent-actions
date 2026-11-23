@@ -31,6 +31,9 @@ jobs:
           python-version: '3.11'
 
       - name: Replay the triage
+        # An explicit `shell: bash` runs with `-e -o pipefail`; the default is only
+        # `bash -e`, under which piping into `tee` would hide a crashed replay.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -40,6 +43,10 @@ jobs:
         # wildcards in it (an unquoted $REPOS would turn `*/*` into file names), and
         # `--` makes every word a repository name, which the script checks, so the
         # input cannot add an option either.
+        #
+        # The report goes to the run summary and also to the log: GitHub's API does not
+        # return a job summary, so the log is the only place a script or a command-line
+        # reader can get it from.
         run: |
           read -ra repos <<< "$REPOS"
-          python scripts/replay_triage.py -- "${repos[@]}" >> "$GITHUB_STEP_SUMMARY"
+          python scripts/replay_triage.py -- "${repos[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

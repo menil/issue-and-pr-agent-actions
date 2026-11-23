@@ -240,7 +240,7 @@ To see how the issue triage behaves on real issues, replay it over a repository'
 GH_TOKEN=$(gh auth token) python scripts/replay_triage.py owner/repo [owner/repo ...]
 ```
 
-or, with no credentials, `--dry-run` fetches everything and builds the prompts without calling the model. The same replay runs from the Actions tab as the manual "Replay Triage" workflow, using this repository's secrets, and writes the report to the run summary.
+or, with no credentials, `--dry-run` fetches everything and builds the prompts without calling the model. The same replay runs from the Actions tab as the manual "Replay Triage" workflow, using this repository's secrets, and writes the report to the run summary and the log.
 
 If you use [direnv](https://direnv.net/), the checked-in `.envrc` loads the
 nix shell automatically when you enter the directory:
