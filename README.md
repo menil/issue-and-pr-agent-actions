@@ -137,7 +137,7 @@ jobs:
 
 ## Issue triage
 
-A second action in this repository, `menil/pr-code-review-action/triage`, handles newly opened issues. With one model call it picks a type label (`bug`, `enhancement`, `question` or `documentation`), flags a likely duplicate, and, when a report is too thin to act on, posts one comment asking for what is missing. It is a triage clerk, not an analyst: it does not judge whether an issue is valid, reproducible, hard or worth doing, and it never closes, assigns or prioritises anything. The design and its threat model are in [docs/triage-action.md](docs/triage-action.md).
+A second action in this repository, `menil/pr-code-review-action/triage`, handles newly opened issues. With one model call it picks a type label (`bug`, `enhancement`, `question` or `documentation`), flags a likely duplicate, and, when a report is too thin to act on, posts one comment asking for what is missing. It is a triage clerk, not an analyst: it does not judge whether an issue is valid, reproducible, hard or worth doing, and it never closes, assigns or prioritises anything. The design and its threat model are in [docs/triage-action.md](docs/triage-action.md). A design for the next stage, an agent that assesses and implements trusted issues as draft pull requests, is in [docs/implement-action.md](docs/implement-action.md); nothing there is built yet.
 
 > [!NOTE]
 > Available from `v1.1.0`. A workflow pinned to `@v1.0.1` or earlier does not have it.
