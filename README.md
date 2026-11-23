@@ -234,6 +234,14 @@ A second, opt-in check sends the same corpus and a fuzz run through GitHub's own
 GITHUB_RENDER_CHECK=1 pytest -k githubs_own_renderer
 ```
 
+To see how the issue triage behaves on real issues, replay it over a repository's existing issues. It is read-only: it asks the model about each issue as a live run would, showing only the issues that came before it, and prints what the model said next to the labels a person set. Run it whenever the prompt in `src/triage_instruction.md` changes. With provider credentials in the environment:
+
+```bash
+GH_TOKEN=$(gh auth token) python scripts/replay_triage.py owner/repo [owner/repo ...]
+```
+
+or, with no credentials, `--dry-run` fetches everything and builds the prompts without calling the model. The same replay runs from the Actions tab as the manual "Replay Triage" workflow, using this repository's secrets, and writes the report to the run summary.
+
 If you use [direnv](https://direnv.net/), the checked-in `.envrc` loads the
 nix shell automatically when you enter the directory:
 
