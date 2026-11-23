@@ -1,0 +1,86 @@
+name: 'AI Issue Triage'
+description: 'Labels a newly opened issue and asks once for missing information, with one model call (a Claude subscription token, then OpenRouter).'
+author: 'meni'
+branding:
+  icon: 'tag'
+  color: 'blue'
+
+inputs:
+  provider:
+    description: "LLM provider to use: 'auto', 'anthropic', or 'openrouter'. Default is 'auto' (prefers a Claude Code token, then an Anthropic key, falling back to OpenRouter)."
+    required: false
+    default: 'auto'
+  openrouter_api_key:
+    description: 'API key for OpenRouter (required when provider is openrouter, or as fallback/primary in auto mode)'
+    required: false
+  openrouter_model:
+    description: 'Model to use for triage'
+    required: false
+    default: 'openrouter/free'
+  openrouter_base_url:
+    description: 'Base URL for OpenRouter completions API'
+    required: false
+    default: 'https://openrouter.ai/api/v1/chat/completions'
+  openrouter_max_tokens:
+    description: 'Maximum tokens for the LLM response'
+    required: false
+    default: '2048'
+  anthropic_api_key:
+    description: 'API key for Anthropic (when provider is anthropic or auto; alternative to claude_code_oauth_token). If both are set, claude_code_oauth_token takes precedence.'
+    required: false
+  claude_code_oauth_token:
+    description: 'OAuth token for a Claude Pro/Max subscription, generated via `claude setup-token` (when provider is anthropic or auto; alternative to anthropic_api_key)'
+    required: false
+  anthropic_model:
+    description: 'Claude model to use for triage'
+    required: false
+    default: 'claude-haiku-4-5'
+  anthropic_base_url:
+    description: 'Base URL for the Anthropic Messages API'
+    required: false
+    default: 'https://api.anthropic.com/v1/messages'
+  anthropic_max_tokens:
+    description: 'Maximum tokens for the Claude response'
+    required: false
+    default: '2048'
+  github_token:
+    description: 'GITHUB_TOKEN used to read issues and write labels and the comment (needs issues: write)'
+    required: false
+    default: '${{ github.token }}'
+  no_triage_label:
+    description: 'An issue that carries this label is left alone'
+    required: false
+    default: 'no-triage'
+  duplicate_candidates:
+    description: 'How many other issues the model is shown to look for a duplicate'
+    required: false
+    default: '50'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+
+    - name: Run Triage Script
+      shell: bash
+      env:
+        PROVIDER: ${{ inputs.provider }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
+        OPENROUTER_MODEL: ${{ inputs.openrouter_model }}
+        OPENROUTER_BASE_URL: ${{ inputs.openrouter_base_url }}
+        OPENROUTER_MAX_TOKENS: ${{ inputs.openrouter_max_tokens }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+        ANTHROPIC_MAX_TOKENS: ${{ inputs.anthropic_max_tokens }}
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        NO_TRIAGE_LABEL: ${{ inputs.no_triage_label }}
+        DUPLICATE_CANDIDATES: ${{ inputs.duplicate_candidates }}
+      # The script reads the issue from the event payload the runner provides
+      # (GITHUB_EVENT_PATH), so no checkout is needed. It lives one level up, in src/.
+      run: python ${{ github.action_path }}/../src/triage.py
