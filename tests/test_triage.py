@@ -309,6 +309,13 @@ def test_a_duplicate_must_be_an_issue_the_model_was_shown(
     assert _decide({**_REPLY, "duplicate_of": given}).duplicate_of == expected
 
 
+def test_a_duplicate_of_the_issue_itself_is_ignored_even_if_it_is_listed() -> None:
+    """The candidate list never holds the issue itself, so this guard is a second layer;
+    it is tested on its own, with a list that wrongly does."""
+    decision = _decide({**_REPLY, "duplicate_of": 7}, candidates={3, 7, 12})
+    assert decision.duplicate_of is None
+
+
 def test_other_fields_and_wrong_types_are_dropped_not_repaired() -> None:
     decision = _decide(
         {
