@@ -111,15 +111,12 @@ def replay_repo(
     rows: list[Row] = []
     for raw in issues[:limit]:
         _, issue = parse_event({"action": "opened", "issue": raw})
-        # A live run sees the issues that exist when the new one opens, most recently
-        # updated first; the closest stand-in is the earlier ones, newest first.
-        earlier = sorted(
-            (other for other in issues if other["number"] < issue.number),
-            key=lambda other: other["number"],
-            reverse=True,
-        )
+        # A live run is offered the earlier issues, most recently updated first (the
+        # selection itself keeps only the earlier ones); the closest stand-in for
+        # "recently updated" at the time is the newest number.
+        newest_first = sorted(issues, key=lambda other: other["number"], reverse=True)
         candidates = candidate_issues(
-            earlier, issue.number, DEFAULT_CANDIDATES, _created(raw)
+            newest_first, issue.number, DEFAULT_CANDIDATES, _created(raw)
         )
         decision: Decision | None = None
         error = "dry run: the model was not asked" if dry_run else ""

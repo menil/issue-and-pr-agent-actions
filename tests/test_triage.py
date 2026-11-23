@@ -158,6 +158,18 @@ def test_candidates_are_open_issues_and_recently_closed_ones() -> None:
     ]
 
 
+def test_a_later_issue_is_never_a_candidate() -> None:
+    """Otherwise two similar reports opened seconds apart would each be marked a
+    duplicate of the other, with no original."""
+    raw = [
+        _raw(5, "earlier"),
+        _raw(7, "itself"),
+        _raw(8, "later"),
+        _raw(30, "much later"),
+    ]
+    assert candidate_issues(raw, 7, 50, NOW) == [(5, "earlier")]
+
+
 def test_candidates_are_cut_at_the_limit() -> None:
     raw = [_raw(n) for n in range(1, 30)]
     assert [n for n, _ in candidate_issues(raw, 99, 5, NOW)] == [1, 2, 3, 4, 5]
@@ -555,6 +567,26 @@ def test_a_thin_report_gets_one_question_and_the_labels(tmp_path: Path) -> None:
 def test_a_duplicate_gets_a_label_and_no_comment(tmp_path: Path) -> None:
     api = FakeGitHub(issues=[_raw(3, "Crash on startup")])
     api, _ = _run(tmp_path, _reply(duplicate_of=3), api)
+    assert api.writes == [
+        ("POST", "/issues/7/labels", {"labels": ["bug", "duplicate"]})
+    ]
+
+
+def test_the_earlier_report_is_not_marked_a_duplicate_of_the_later_one(
+    tmp_path: Path,
+) -> None:
+    """The case found in the sandbox: #2 was triaged after #7 existed, and the model
+    called #2 a duplicate of #7."""
+    api = FakeGitHub(issues=[_raw(7, "export crashes on headerless CSV")])
+    api, _ = _run(tmp_path, _reply(duplicate_of=7), api, payload=_payload(number=2))
+    assert api.writes == [("POST", "/issues/2/labels", {"labels": ["bug"]})]
+
+
+def test_the_later_report_is_marked_a_duplicate_of_the_earlier_one(
+    tmp_path: Path,
+) -> None:
+    api = FakeGitHub(issues=[_raw(2, "Export fails on a file with no header row")])
+    api, _ = _run(tmp_path, _reply(duplicate_of=2), api, payload=_payload(number=7))
     assert api.writes == [
         ("POST", "/issues/7/labels", {"labels": ["bug", "duplicate"]})
     ]
