@@ -311,6 +311,23 @@ def github_request(
     return json.loads(body) if body else None
 
 
+def create_label(
+    repo: str, token: str, name: str, color: str, description: str
+) -> None:
+    """Create a label with a fixed colour and description; fine if it already exists."""
+    try:
+        github_request(
+            "POST",
+            repo,
+            "/labels",
+            token,
+            {"name": name, "color": color, "description": description},
+        )
+    except urllib.error.HTTPError as error:
+        if error.code != 422:  # 422: it was created in the meantime
+            raise
+
+
 def apply_plan(
     plan: Plan, repo: str, issue_number: int, token: str, repo_labels: frozenset[str]
 ) -> None:
@@ -326,17 +343,7 @@ def apply_plan(
     for label in plan.labels:
         if label in CREATED_LABELS and label not in repo_labels:
             color, description = CREATED_LABELS[label]
-            try:
-                github_request(
-                    "POST",
-                    repo,
-                    "/labels",
-                    token,
-                    {"name": label, "color": color, "description": description},
-                )
-            except urllib.error.HTTPError as error:
-                if error.code != 422:  # 422: it was created in the meantime
-                    raise
+            create_label(repo, token, label, color, description)
     github_request(
         "POST",
         repo,
