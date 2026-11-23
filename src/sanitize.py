@@ -132,7 +132,7 @@ def _is_invisible(ch: str) -> bool:
     )
 
 
-def _strip_invisible_chars(text: str) -> str:
+def strip_invisible_chars(text: str) -> str:
     """Drop control, format and other invisible characters, keeping newlines and tabs.
 
     These render as nothing for a human but are readable by any AI agent that later
@@ -218,7 +218,7 @@ def sanitize_llm_text(text: str, max_chars: int) -> str:
     """
     # Strip before capping: otherwise a run of invisible characters at the start would
     # use up the cap, push the visible text out of it, and get the whole comment withheld.
-    text = _strip_invisible_chars(text).strip()
+    text = strip_invisible_chars(text).strip()
     truncated = len(text) > max_chars
     text = text[:max_chars].rstrip()
 
