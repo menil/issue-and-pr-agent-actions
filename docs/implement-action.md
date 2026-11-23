@@ -40,10 +40,10 @@ from its documentation:
 |---|---|
 | Who starts a run | By default only an issue **opened by someone with write access** (`author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`, checked in the workflow as well as by the action). Anyone else's issue starts nothing; see "Other people's issues". |
 | Automatic or not | Opt-in per repository by a variable, `AGENT_AUTO=true`, default off. With it off, nothing starts until a maintainer applies `ready-to-implement`. |
-| Stages | Two, in separate jobs: **assess** (read-only), then **implement**, only if the assessment passed. |
+| Stages | Three jobs, because a job's permissions are fixed for all its steps: **assess** (model, read-only), **report** (code only, `issues: write`), then **fix** (model, `contents` and `pull-requests: write`), only if the gate passed. |
 | What the model decides | A verdict and, in stage two, the code of a draft PR. Never a label, a comment's markdown, a branch name or a command outside the allowlist. |
 | Credentials | **Route A**: the workflow's own `GITHUB_TOKEN` and the Claude subscription token, and nothing else. No personal access token and no GitHub App is installed. The cost is one click per agent pull request (see below). |
-| Where it lives | A thin wrapper workflow in each consuming repo. The instruction files and the small script that validates the verdict and writes labels live here, in `implement/`, so they are versioned and tagged with the other actions. **[TBD]** whether `implement/` is a composite action like `triage/` or only files the wrapper checks out. |
+| Where it lives | Three composite actions in this repo, one per stage (`implement/assess`, `implement/report`, `implement/fix`), versioned with the other actions and used like `triage/`. Each repository has a thin wrapper workflow that declares the three jobs, their `permissions:` and the `AGENT_AUTO` rule, and calls one action per job. Not a reusable workflow: the permissions would then sit in this repository, out of sight of the repository that is handing them out. Not just files the wrapper checks out: the validation and the label map must be one tested copy. |
 
 ## Flow
 
@@ -52,20 +52,23 @@ from its documentation:
    second run for the same issue (concurrency group per issue number).
    Opened by a trusted author and `AGENT_AUTO` is on, or `ready-to-implement` was
    applied by a person with write access: continue. Otherwise stop.
-2. **Assess** (job 1). Permissions: `contents: read`, `issues: read`. A checkout of the
+2. **Assess** (job `assess`). Permissions: `contents: read`, `issues: read`. A checkout of the
    default branch, the model, and a small allowlist of tools: read files, search,
    and run the repository's own test or build command named in the instruction file.
    It returns a verdict as JSON, through `--json-schema`:
-   `{valid, reproduced, effort, evidence, summary}`.
-3. **Validate the verdict in code.** Anything outside the contract is dropped. The
-   script, not the model, applies the labels and posts one comment (sanitized with
-   `src/sanitize.py`, like every model-written comment in this repo).
+   `{valid, reproduced, effort, evidence, summary}`. The job's only output is that
+   verdict, as a string.
+3. **Validate the verdict in code** (job `report`: `issues: write`, no checkout, no
+   model). Anything outside the contract is dropped. The script, not the model,
+   applies the labels and posts one comment (sanitized with `src/sanitize.py`, like
+   every model-written comment in this repo). Its job output is the gate result.
 4. **Gate.** Implement only if `valid` is `yes`, `reproduced` is `yes` (a bug) or
    `not_applicable` (a feature or change request), and `effort` is not `large`. Any
    other outcome stops with the comment, for the maintainer to decide. A failed
    reproduction says "could not reproduce"; it never closes or rejects the issue.
-5. **Implement** (job 2). Permissions: `contents: write`, `pull-requests: write`,
-   `issues: write`, **not** `workflows`. The model edits files and runs the test
+5. **Fix** (job `fix`). Permissions: `contents: write`, `pull-requests: write`,
+   `issues: read` (it only reads the issue; labels and the comment are the `report`
+   job's, so no write access to issues is needed here), **not** `workflows`. The model edits files and runs the test
    command; the wrapper pushes the branch and opens the draft PR with a fixed
    title and body template, linking the issue.
 6. **After the PR.** `validate` and the review action run on it like on any pull
@@ -169,15 +172,19 @@ sees it.
 
 ```
 implement/
+  assess/action.yml          reads the issue (trusted author only), runs the model, outputs the verdict
+  report/action.yml          validates the verdict, writes labels and the comment, outputs the gate
+  fix/action.yml             reads the issue, runs the model, refuses .github/ changes, commits, pushes, opens the draft PR
   assess_instruction.md      what the assessment may do and must return
-  implement_instruction.md   how to work an issue, in a plain file (not tool-specific)
-  apply_verdict.py           validates the verdict, writes labels and the comment
+  fix_instruction.md         how to work an issue, in a plain file (not tool-specific)
+src/implement.py             the shared code: issue fetch and author check, verdict validation, label map, gate
 docs/implement-action.md     this document
 ```
 
-`apply_verdict.py` reuses `src/sanitize.py` and the label-write helpers of
+`src/implement.py` reuses `src/sanitize.py` and the label-write helpers of
 `src/triage.py`. The instruction files are plain markdown so a different harness can
-replace the action later without losing them.
+replace the model step later without losing them. Each action declares only the inputs
+it uses, and `tests/test_action_yml.py` is extended to check all three.
 
 ## Verification
 
@@ -204,9 +211,9 @@ replace the action later without losing them.
 
 Answered by the spike: which token opens the pull request (`GITHUB_TOKEN`, plus the
 Actions setting and one click for the checks); whether the subscription carries the
-runs (yes, for one small issue).
+runs (yes, for one small issue). Answered since: how `implement/` is packaged (three
+composite actions and a thin wrapper, see Decisions).
 
-- **[TBD]** Is `implement/` a composite action or files the wrapper checks out?
 - **[TBD]** What do the subscription's terms say about automation in CI? The runs worked;
   the terms are not checked.
 - **[TBD]** Can the test run be taken out of the step that holds the token, or the
