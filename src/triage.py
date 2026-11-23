@@ -343,6 +343,53 @@ def _int_from_env(name: str, default: int) -> int:
         return default
 
 
+def ask_model(
+    provider: str, repo: str, issue: Issue, candidates: list[tuple[int, str]]
+) -> tuple[Decision | None, Exception | None]:
+    """Ask the configured providers what to do with one issue.
+
+    Returns the validated decision, or None with the last error if no provider gave a
+    usable answer. This is the only place the model is called, so a replay over old
+    issues goes through exactly the code a live run does.
+    """
+    system_instruction = _read_instruction()
+    user_message = build_user_message(issue, candidates, secrets.token_hex(8))
+    candidate_numbers = {number for number, _ in candidates}
+
+    def send(config: ProviderConfig) -> str:
+        if config.name == "anthropic":
+            return anthropic_chat(
+                config.api_key,
+                system_instruction,
+                user_message,
+                model=config.model,
+                base_url=config.base_url,
+                max_tokens=config.max_tokens,
+                use_oauth=config.use_oauth,
+                what="triage",
+            )
+        if config.name == "openrouter":
+            return openrouter_chat(
+                config.api_key,
+                system_instruction,
+                user_message,
+                model=config.model,
+                base_url=config.base_url,
+                max_tokens=config.max_tokens,
+                repo=repo,
+                what="triage",
+            )
+        raise ValueError(f"Unsupported provider: {config.name}")
+
+    decision, _, last_error = request_with_fallback(
+        build_provider_candidates(provider),
+        send,
+        lambda raw: parse_decision(raw, candidate_numbers, issue.number),
+        what="triage",
+    )
+    return decision, last_error
+
+
 def run() -> None:
     provider = os.environ.get("PROVIDER", "auto").strip().lower()
     # Missing credentials are a setup mistake, not a run-time failure: this exits 1.
@@ -390,41 +437,7 @@ def run() -> None:
         if isinstance(label, dict) and isinstance(label.get("name"), str)
     )
 
-    system_instruction = _read_instruction()
-    user_message = build_user_message(issue, candidates, secrets.token_hex(8))
-    candidate_numbers = {number for number, _ in candidates}
-
-    def send(config: ProviderConfig) -> str:
-        if config.name == "anthropic":
-            return anthropic_chat(
-                config.api_key,
-                system_instruction,
-                user_message,
-                model=config.model,
-                base_url=config.base_url,
-                max_tokens=config.max_tokens,
-                use_oauth=config.use_oauth,
-                what="triage",
-            )
-        if config.name == "openrouter":
-            return openrouter_chat(
-                config.api_key,
-                system_instruction,
-                user_message,
-                model=config.model,
-                base_url=config.base_url,
-                max_tokens=config.max_tokens,
-                repo=repo,
-                what="triage",
-            )
-        raise ValueError(f"Unsupported provider: {config.name}")
-
-    decision, _, last_error = request_with_fallback(
-        build_provider_candidates(provider),
-        send,
-        lambda raw: parse_decision(raw, candidate_numbers, issue.number),
-        what="triage",
-    )
+    decision, last_error = ask_model(provider, repo, issue, candidates)
     if decision is None:
         print("::warning::Issue triage got no usable answer and changed nothing.")
         print(f"Last error: {log_text(last_error)}", file=sys.stderr)

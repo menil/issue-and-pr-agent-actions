@@ -1,0 +1,45 @@
+name: Replay Triage
+
+# Manual. Asks the model about issues that already exist, as a live run would, and
+# writes what it would have done next to what a person decided into the run summary.
+# It reads public issues and writes nothing to any repository.
+on:
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'Repositories to replay, space separated (owner/name)'
+        required: true
+        default: 'menil/GitEmployed menil/pdf-vdiff'
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          # Nothing here pushes, so don't leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Replay the triage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          REPOS: ${{ inputs.repos }}
+        # The input is split into one word per repository without the shell expanding
+        # wildcards in it (an unquoted $REPOS would turn `*/*` into file names), and
+        # `--` makes every word a repository name, which the script checks, so the
+        # input cannot add an option either.
+        run: |
+          read -ra repos <<< "$REPOS"
+          python scripts/replay_triage.py -- "${repos[@]}" >> "$GITHUB_STEP_SUMMARY"
