@@ -7,6 +7,7 @@ An automated Pull Request code reviewer powered by OpenRouter language models (l
 - Line-by-line inline code comments on modified lines only.
 - Strict bug, performance, readability, and security focus.
 - Lightweight, plain Python implementation with zero third-party library dependencies.
+- A second action, [issue triage](#issue-triage), labels newly opened issues and asks for missing information, with the same providers.
 
 ## Usage
 
@@ -133,6 +134,56 @@ jobs:
 | `github_token` | GitHub token for posting reviews | No | `${{ github.token }}` |
 | `post_summary` | Whether to post the high-level summary (PR-level overview of the review findings) as the review body | No | `true` |
 | `exclude_patterns` | Custom regex patterns to exclude from review, separated by commas and/or newlines | No | `''` |
+
+## Issue triage
+
+A second action in this repository, `menil/pr-code-review-action/triage`, handles newly opened issues. With one model call it picks a type label (`bug`, `enhancement`, `question` or `documentation`), flags a likely duplicate, and, when a report is too thin to act on, posts one comment asking for what is missing. It is a triage clerk, not an analyst: it does not judge whether an issue is valid, reproducible, hard or worth doing, and it never closes, assigns or prioritises anything. The design and its threat model are in [docs/triage-action.md](docs/triage-action.md).
+
+> [!NOTE]
+> Not released yet: the first release that contains it will be `v1.1.0`. Until then `@v1` does not have it.
+
+```yaml
+name: Issue Triage
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  contents: read
+
+# One run per issue, and a second one never cancels the first halfway through.
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Triage the issue
+        uses: menil/pr-code-review-action/triage@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+No checkout is needed: the issue is read from the event. It takes the same provider inputs as the review action (`provider`, `openrouter_*`, `anthropic_*`, `claude_code_oauth_token`), tried in the same order. The ones that differ:
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `github_token` | Token used to read issues and write labels and the comment; needs `issues: write` | `${{ github.token }}` |
+| `no_triage_label` | An issue that carries this label is left alone | `no-triage` |
+| `duplicate_candidates` | How many other issues the model is shown to look for a duplicate | `50` |
+| `openrouter_max_tokens`, `anthropic_max_tokens` | The reply is a small JSON object | `2048` |
+
+What it does and does not do:
+
+- It leaves an issue alone, without calling the model, if a bot opened it, if it already has a triage label (`bug`, `enhancement`, `question`, `documentation`, `duplicate`, `needs-info`) or the opt-out label, or if it has already asked its question.
+- The type and duplicate labels are added only if the repository already has them; GitHub's default labels include all five. `needs-info` is created if it is missing, and is added only together with the comment that says what is missing.
+- A duplicate must be one of the issues the model was shown, and it only adds a label: the issue is never closed.
+- The comment is the one place model-written text reaches the thread. It goes through the same sanitizer as review comments, and is set in a fixed template.
+- If the model fails or answers in an unusable form, nothing is changed and the run still succeeds. Missing credentials fail the run, as in the review action.
 
 ## Output safety
 
