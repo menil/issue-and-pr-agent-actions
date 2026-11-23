@@ -48,7 +48,9 @@ there are real outside issues to look at.
 2. **Gather.** The title (cut at 300 characters) and body (cut at 6,000 characters,
    invisible characters removed), and up to 50 other issues as `#N: title` for
    duplicate candidates: the open ones, plus (proposed, see the open questions)
-   those closed in the last 90 days.
+   those closed in the last 90 days. Only issues opened before this one are
+   offered, so a duplicate always points back at the earlier report and two
+   similar issues are never marked as duplicates of each other.
 3. **Ask the model once** for the JSON below, through the provider cascade. The
    issue text goes in clearly delimited and is described as untrusted data.
 4. **Validate** the answer in code against the contract below. Anything outside

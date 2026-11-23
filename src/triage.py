@@ -143,7 +143,12 @@ def _one_line(text: str, max_chars: int) -> str:
 def candidate_issues(
     raw_issues: list[Any], self_number: int, limit: int, now: datetime
 ) -> list[tuple[int, str]]:
-    """Other issues the new one may duplicate: the open ones, and those closed lately.
+    """Earlier issues the new one may duplicate: the open ones, and those closed lately.
+
+    Only issues numbered below this one are offered. Two similar reports can arrive
+    seconds apart, and the first one's run may start after the second was opened; if it
+    were shown that later issue it would be marked a duplicate of it, and both would be,
+    with no original. A duplicate always points back at the earlier report.
 
     The list comes most recently updated first and is cut at `limit`. Pull requests
     appear in the issues API and are left out.
@@ -154,7 +159,7 @@ def candidate_issues(
         if not isinstance(raw, dict) or "pull_request" in raw:
             continue
         number = raw.get("number")
-        if not isinstance(number, int) or number == self_number:
+        if not isinstance(number, int) or number >= self_number:
             continue
         if raw.get("state") == "closed":
             closed_at = raw.get("closed_at")
