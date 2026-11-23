@@ -5,7 +5,6 @@ import os
 import random
 import re
 import shutil
-import subprocess
 import time
 from collections.abc import Callable
 from typing import Any
@@ -22,10 +21,14 @@ from pr_review import (
     filter_diff,
     get_exclude_regexes,
 )
+from render_oracle import (
+    github_live_elements,
+    render_markdown,
+    render_on_github,
+)
 from sanitize import (
     MAX_COMMENT_CHARS,
     MAX_SUMMARY_CHARS,
-    _FENCE_LANGUAGES,
     _MAX_GROWTH_FACTOR,
     _OUTPUT_SLACK,
     SanitizeError,
@@ -2242,82 +2245,7 @@ def test_main_explicit_openrouter_bypasses_claude(
 # pinning an escaping format that a safe future change might legitimately alter. Exact
 # outputs are only pinned where legitimate review text must survive unchanged.
 
-_CMARK = shutil.which("cmark-gfm")
 # Block and inline tags that cannot load anything or navigate anywhere.
-_INERT_TAGS = {
-    "p", "em", "strong", "del", "ul", "ol", "li", "blockquote", "h1", "h2", "h3",
-    "h4", "h5", "h6", "table", "thead", "tbody", "tr", "th", "td", "hr", "br",
-    "input", "code", "pre",
-}  # fmt: skip
-
-
-def _render(markdown: str) -> str:
-    assert _CMARK
-    return subprocess.run(
-        [
-            _CMARK,
-            "-e",
-            "table",
-            "-e",
-            "autolink",
-            "-e",
-            "strikethrough",
-            "-e",
-            "tasklist",
-        ]
-        + ["--unsafe"],  # let raw HTML through, so it can be detected
-        input=markdown,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=True,
-    ).stdout
-
-
-def _live_elements(html: str) -> list[str]:
-    """List what GitHub would render as active outside code: links, images, HTML,
-    mentions and cross-repository references."""
-    # GitHub gives some fence languages special behaviour (suggestion blocks, diagrams),
-    # so a language that is not on our allowlist counts as active even though it is code.
-    found = [
-        f"fence language: {language}"
-        for language in re.findall(r'<code class="language-([^"]*)"', html)
-        if language not in _FENCE_LANGUAGES
-    ]
-    # Code ends one text node and starts the next, so leave a gap instead of joining the
-    # text on either side into something GitHub would never see as one string.
-    html = re.sub(r"<pre\b.*?</pre>", " ", html, flags=re.DOTALL)
-    html = re.sub(r"<code\b.*?</code>", " ", html, flags=re.DOTALL)
-    if re.search(r"<\s*a[\s/>]", html, flags=re.IGNORECASE):
-        found.append("link")
-    if re.search(r"<\s*img[\s/>]", html, flags=re.IGNORECASE):
-        found.append("image")
-    for tag in re.findall(r"<\s*([a-zA-Z][a-zA-Z0-9]*)", html):
-        if tag.lower() not in _INERT_TAGS | {"a", "img"}:
-            found.append(f"html:{tag}")
-            break
-    text = re.sub(r"<[^>]+>", " ", html)
-    if re.search(r"(?<![A-Za-z0-9_])@[A-Za-z0-9]", text):
-        found.append("mention")
-    if re.search(r"(?<![\w/.-])[A-Za-z0-9-]+/[A-Za-z0-9_.-]+#\d+", text):
-        found.append("cross-repo reference")
-    return found
-
-
-@pytest.fixture
-def require_cmark() -> None:
-    """Fail in CI, where a missing oracle would silently turn the checks off; skip locally."""
-    if _CMARK is None:
-        if os.environ.get("CI"):
-            pytest.fail(
-                "cmark-gfm is required for the sanitizer tests in CI (shell.nix)"
-            )
-        pytest.skip("cmark-gfm not found; it is provided by the nix shell")
-
-
-@pytest.fixture
-def live_elements(require_cmark: None) -> Callable[[str], list[str]]:
-    return lambda markdown: _live_elements(_render(markdown))
 
 
 # Each entry is a way to get something active onto the thread. Most were found by
@@ -2482,32 +2410,6 @@ def test_sanitized_random_hostile_documents_render_nothing_active(
     assert not failures, f"{len(failures)} live documents, first: {failures[:3]}"
 
 
-def _github_live_elements(html: str) -> list[str]:
-    """List what GitHub's own renderer makes active in its HTML, outside code: links
-    (autolinks, mentions, issue and commit references), images, math, alerts, embedded
-    renderers (mermaid, geojson, stl), and fences with a language that is not on our
-    allowlist (`suggestion` becomes a button)."""
-    found = [
-        f"fence language: {language}"
-        for language in re.findall(r'<pre lang="([^"]*)"', html)
-        if language not in _FENCE_LANGUAGES
-    ]
-    if "js-render-needs-enrichment" in html:
-        found.append("embedded renderer")
-    html = re.sub(r"<pre\b.*?</pre>", " ", html, flags=re.DOTALL)
-    html = re.sub(r"<code\b.*?</code>", " ", html, flags=re.DOTALL)
-    for name, pattern in [
-        ("link", r"<a[\s>]"),
-        ("image", r"<img[\s>]"),
-        ("math", r"<math-renderer"),
-        ("alert", r"markdown-alert"),
-        ("embed", r"<(?:iframe|video|details|input)[\s>]"),
-    ]:
-        if re.search(pattern, html):
-            found.append(name)
-    return found
-
-
 @pytest.mark.parametrize(
     ("html", "expected"),
     [
@@ -2557,32 +2459,7 @@ def test_github_oracle_flags_what_github_renders(
     html: str, expected: list[str]
 ) -> None:
     """The oracle is itself tested, on HTML shaped like what GitHub's renderer returns."""
-    assert _github_live_elements(html) == expected
-
-
-def _render_on_github(text: str) -> str:
-    """Render Markdown with GitHub's own renderer (`gh api markdown`). It sends only the
-    text given, to a public endpoint that creates nothing. A run is hundreds of requests,
-    so rate limits and network blips are waited out instead of failing the whole run."""
-    problem = ""
-    for attempt in range(6):
-        try:
-            result = subprocess.run(
-                ["gh", "api", "-X", "POST", "markdown", "-f", f"text={text}", "-f",
-                 "mode=gfm", "-f", "context=octocat/Hello-World"],
-                capture_output=True, text=True, timeout=60,
-            )  # fmt: skip
-        except subprocess.TimeoutExpired:
-            problem = "timed out"
-            time.sleep(5 * (attempt + 1))
-            continue
-        if result.returncode == 0:
-            return result.stdout
-        problem = result.stderr[:200]
-        time.sleep(
-            30 * (attempt + 1) if "rate limit" in problem.lower() else 5 * (attempt + 1)
-        )
-    raise RuntimeError(f"gh api markdown kept failing: {problem}")
+    assert github_live_elements(html) == expected
 
 
 @pytest.mark.skipif(
@@ -2612,7 +2489,7 @@ def test_sanitized_output_renders_nothing_active_on_githubs_own_renderer() -> No
     ]
     failures = []
     for label, raw in documents:
-        found = _github_live_elements(_render_on_github(sanitize_llm_text(raw, 10000)))
+        found = github_live_elements(render_on_github(sanitize_llm_text(raw, 10000)))
         if found:
             failures.append((label, found, raw[:80]))
         time.sleep(0.15)  # stay under GitHub's secondary rate limit
@@ -2647,7 +2524,9 @@ def test_hostile_corpus_is_live_before_sanitizing(
 def test_sanitized_hidden_definition_is_visible_to_readers(require_cmark: None) -> None:
     """A link definition renders as nothing, so it could hide instructions for a later AI
     reader; escaped, the text must show."""
-    html = _render(sanitize_llm_text("> [//]: # (instructions for AI agents)", 1000))
+    html = render_markdown(
+        sanitize_llm_text("> [//]: # (instructions for AI agents)", 1000)
+    )
     assert "instructions for AI agents" in re.sub(r"<[^>]+>", " ", html)
 
 
@@ -3341,7 +3220,7 @@ def test_main_notices_after_an_unterminated_fence_are_not_swallowed(
     """A summary that ends inside a code block must not pull the warnings appended after it
     into the block, where they would read as code instead of as an alert."""
     body, _ = _run_main(_model_response("```\ncode", "\u200b\u200d"))
-    html = _render(body)
+    html = render_markdown(body)
     outside_code = re.sub(r"<pre\b.*?</pre>", " ", html, flags=re.DOTALL)
     assert "were withheld" in outside_code
     assert "code" in html  # the summary text itself is still posted
