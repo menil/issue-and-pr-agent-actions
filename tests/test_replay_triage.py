@@ -141,7 +141,7 @@ def test_no_usable_answer_is_recorded() -> None:
 
 def test_the_plan_follows_the_repositorys_labels() -> None:
     rows, _ = _replay([_issue(1)], answer=(_decision(type="bug"), None))
-    assert rows[0].plan == Plan(None, ("bug",))
+    assert rows[0].plan == Plan(None, ("bug", "triaged"))
 
 
 # --- the report ---
@@ -155,7 +155,7 @@ def _row(number: int, **overrides: Any) -> Row:
         "human_type": "bug",
         "human_labels": ("bug",),
         "decision": _decision(),
-        "plan": Plan(None, ("bug",)),
+        "plan": Plan(None, ("bug", "triaged")),
         "error": "",
     }
     return Row(**{**fields, **overrides})
@@ -164,7 +164,7 @@ def _row(number: int, **overrides: Any) -> Row:
 def test_the_report_counts_matches_and_questions() -> None:
     rows = [
         _row(1),
-        _row(2, decision=_decision(type="enhancement"), plan=Plan(None, ())),
+        _row(2, decision=_decision(type="enhancement"), plan=Plan(None, ("triaged",))),
         _row(
             3,
             decision=_decision(needs_info=True, missing="Which version?"),

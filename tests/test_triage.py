@@ -23,7 +23,11 @@ from triage import (
     skip_reason,
 )
 
-ALL_LABELS = frozenset({"bug", "enhancement", "question", "documentation", "duplicate"})
+# What a repository usually has: the type labels and duplicate from GitHub's defaults, and
+# triaged, which this action would otherwise create. needs-info is not there on purpose.
+ALL_LABELS = frozenset(
+    {"bug", "enhancement", "question", "documentation", "duplicate", "triaged"}
+)
 NOW = datetime(2026, 11, 22, tzinfo=timezone.utc)
 
 
@@ -361,21 +365,25 @@ def _decision(**overrides: Any) -> Decision:
 
 
 def test_a_type_label_is_added_when_the_repository_has_it() -> None:
-    assert make_plan(_decision(type="bug"), ALL_LABELS) == Plan(None, ("bug",))
+    assert make_plan(_decision(type="bug"), ALL_LABELS) == Plan(
+        None, ("bug", "triaged")
+    )
 
 
 def test_a_type_label_the_repository_lacks_is_skipped_not_created() -> None:
-    assert make_plan(_decision(type="question"), frozenset({"bug"})) == Plan(None, ())
+    assert make_plan(_decision(type="question"), frozenset({"bug"})) == Plan(
+        None, ("triaged",)
+    )
 
 
 def test_a_duplicate_gets_only_a_label() -> None:
     plan = make_plan(_decision(type="bug", duplicate_of=3), ALL_LABELS)
-    assert plan == Plan(None, ("bug", "duplicate"))
+    assert plan == Plan(None, ("bug", "duplicate", "triaged"))
 
 
 def test_the_duplicate_label_is_skipped_when_the_repository_lacks_it() -> None:
     plan = make_plan(_decision(duplicate_of=3), frozenset({"bug"}))
-    assert plan.labels == ()
+    assert plan.labels == ("triaged",)
 
 
 def test_needs_info_comes_with_a_comment_and_the_label() -> None:
@@ -383,7 +391,7 @@ def test_needs_info_comes_with_a_comment_and_the_label() -> None:
         _decision(type="bug", needs_info=True, missing="Which version are you on?"),
         ALL_LABELS,
     )
-    assert plan.labels == ("bug", "needs-info")
+    assert plan.labels == ("bug", "needs-info", "triaged")
     assert plan.comment is not None
     assert "Which version are you on?" in plan.comment
     assert plan.comment.endswith(MARKER)
@@ -393,12 +401,12 @@ def test_needs_info_comes_with_a_comment_and_the_label() -> None:
 @pytest.mark.parametrize("missing", ["", "   ", "​‍"])
 def test_needs_info_without_anything_to_say_writes_neither(missing: str) -> None:
     plan = make_plan(_decision(needs_info=True, missing=missing), ALL_LABELS)
-    assert plan == Plan(None, ())
+    assert plan == Plan(None, ("triaged",))
 
 
 def test_needs_info_is_ignored_unless_the_model_said_so() -> None:
     plan = make_plan(_decision(needs_info=False, missing="Which version?"), ALL_LABELS)
-    assert plan == Plan(None, ())
+    assert plan == Plan(None, ("triaged",))
 
 
 def test_a_comment_that_cannot_be_made_safe_is_not_posted() -> None:
@@ -406,7 +414,7 @@ def test_a_comment_that_cannot_be_made_safe_is_not_posted() -> None:
         plan = make_plan(
             _decision(needs_info=True, missing="Which version?"), ALL_LABELS
         )
-    assert plan == Plan(None, ())
+    assert plan == Plan(None, ("triaged",))
 
 
 def test_the_model_cannot_put_links_pings_or_html_in_the_comment() -> None:
@@ -470,13 +478,15 @@ class FakeGitHub:
 def test_the_comment_is_written_before_the_labels() -> None:
     api = FakeGitHub()
     with patch("triage.github_request", api):
-        apply_plan(Plan("hello", ("bug", "needs-info")), "o/r", 7, "t", ALL_LABELS)
+        apply_plan(
+            Plan("hello", ("bug", "needs-info", "triaged")), "o/r", 7, "t", ALL_LABELS
+        )
     assert [(m, p) for m, p, _ in api.writes] == [
         ("POST", "/issues/7/comments"),
         ("POST", "/labels"),
         ("POST", "/issues/7/labels"),
     ]
-    assert api.writes[-1][2] == {"labels": ["bug", "needs-info"]}
+    assert api.writes[-1][2] == {"labels": ["bug", "needs-info", "triaged"]}
 
 
 def test_needs_info_is_not_created_when_the_repository_has_it() -> None:
@@ -547,7 +557,7 @@ def _reply(**fields: Any) -> str:
 
 def test_a_bug_report_gets_its_label(tmp_path: Path) -> None:
     api, chat = _run(tmp_path, _reply())
-    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["bug"]})]
+    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["bug", "triaged"]})]
     chat.assert_called_once()
 
 
@@ -561,14 +571,14 @@ def test_a_thin_report_gets_one_question_and_the_labels(tmp_path: Path) -> None:
         ("POST", "/issues/7/labels"),
     ]
     assert "What steps trigger the crash?" in api.writes[0][2]["body"]
-    assert api.writes[2][2] == {"labels": ["bug", "needs-info"]}
+    assert api.writes[2][2] == {"labels": ["bug", "needs-info", "triaged"]}
 
 
 def test_a_duplicate_gets_a_label_and_no_comment(tmp_path: Path) -> None:
     api = FakeGitHub(issues=[_raw(3, "Crash on startup")])
     api, _ = _run(tmp_path, _reply(duplicate_of=3), api)
     assert api.writes == [
-        ("POST", "/issues/7/labels", {"labels": ["bug", "duplicate"]})
+        ("POST", "/issues/7/labels", {"labels": ["bug", "duplicate", "triaged"]})
     ]
 
 
@@ -579,7 +589,7 @@ def test_the_earlier_report_is_not_marked_a_duplicate_of_the_later_one(
     called #2 a duplicate of #7."""
     api = FakeGitHub(issues=[_raw(7, "export crashes on headerless CSV")])
     api, _ = _run(tmp_path, _reply(duplicate_of=7), api, payload=_payload(number=2))
-    assert api.writes == [("POST", "/issues/2/labels", {"labels": ["bug"]})]
+    assert api.writes == [("POST", "/issues/2/labels", {"labels": ["bug", "triaged"]})]
 
 
 def test_the_later_report_is_marked_a_duplicate_of_the_earlier_one(
@@ -588,13 +598,13 @@ def test_the_later_report_is_marked_a_duplicate_of_the_earlier_one(
     api = FakeGitHub(issues=[_raw(2, "Export fails on a file with no header row")])
     api, _ = _run(tmp_path, _reply(duplicate_of=2), api, payload=_payload(number=7))
     assert api.writes == [
-        ("POST", "/issues/7/labels", {"labels": ["bug", "duplicate"]})
+        ("POST", "/issues/7/labels", {"labels": ["bug", "duplicate", "triaged"]})
     ]
 
 
 def test_a_duplicate_the_model_invented_is_ignored(tmp_path: Path) -> None:
     api, _ = _run(tmp_path, _reply(duplicate_of=555))
-    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["bug"]})]
+    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["bug", "triaged"]})]
 
 
 def test_the_model_cannot_apply_a_label_of_its_own(tmp_path: Path) -> None:
@@ -602,12 +612,14 @@ def test_the_model_cannot_apply_a_label_of_its_own(tmp_path: Path) -> None:
         type="priority/p0", labels=["priority/p0", "spam"], close=True, assign="x"
     )
     api, _ = _run(tmp_path, reply)
-    assert api.writes == []
+    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["triaged"]})]
 
 
-def test_nothing_is_written_when_there_is_nothing_to_say(tmp_path: Path) -> None:
+def test_when_there_is_nothing_to_say_the_issue_is_only_marked_triaged(
+    tmp_path: Path,
+) -> None:
     api, _ = _run(tmp_path, _reply(type="none"))
-    assert api.writes == []
+    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["triaged"]})]
 
 
 @pytest.mark.parametrize(
@@ -670,6 +682,46 @@ def test_the_claude_subscription_is_used_first(tmp_path: Path) -> None:
 
 
 # --- when something goes wrong ---
+
+
+def test_a_triaged_issue_is_left_alone_so_a_second_run_does_nothing(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(labels=[{"name": "triaged"}])
+    api, chat = _run(tmp_path, _reply(), payload=payload)
+    chat.assert_not_called()
+    assert api.calls == []
+
+
+def test_triaged_is_created_when_the_repository_lacks_it(tmp_path: Path) -> None:
+    api = FakeGitHub(labels=ALL_LABELS - {"triaged"})
+    api, _ = _run(tmp_path, _reply(), api)
+    assert api.writes == [
+        (
+            "POST",
+            "/labels",
+            {
+                "name": "triaged",
+                "color": triage.TRIAGED_COLOR,
+                "description": triage.TRIAGED_DESCRIPTION,
+            },
+        ),
+        ("POST", "/issues/7/labels", {"labels": ["bug", "triaged"]}),
+    ]
+
+
+def test_the_issue_is_marked_triaged_even_when_the_type_label_is_missing(
+    tmp_path: Path,
+) -> None:
+    api = FakeGitHub(labels=frozenset({"triaged"}))
+    api, _ = _run(tmp_path, _reply(), api)
+    assert api.writes == [("POST", "/issues/7/labels", {"labels": ["triaged"]})]
+
+
+def test_a_failed_run_does_not_claim_the_issue_was_triaged(tmp_path: Path) -> None:
+    api, _ = _run(tmp_path, ValueError("boom"))
+    assert "/labels" not in [path for _, path, _ in api.writes]
+    assert api.writes == []
 
 
 def test_a_provider_that_always_fails_changes_nothing(

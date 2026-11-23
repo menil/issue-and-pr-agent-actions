@@ -42,8 +42,19 @@ DUPLICATE_LABEL = "duplicate"
 NEEDS_INFO_LABEL = "needs-info"
 NEEDS_INFO_COLOR = "fbca04"
 NEEDS_INFO_DESCRIPTION = "More information is needed to triage this issue"
+TRIAGED_LABEL = "triaged"
+TRIAGED_COLOR = "5319e7"
+TRIAGED_DESCRIPTION = "Issue has received an initial automated triage pass"
 # An issue that already carries one of these has been looked at, by a person or by us.
-TRIAGE_LABELS = frozenset({*TYPE_LABELS.values(), DUPLICATE_LABEL, NEEDS_INFO_LABEL})
+TRIAGE_LABELS = frozenset(
+    {*TYPE_LABELS.values(), DUPLICATE_LABEL, NEEDS_INFO_LABEL, TRIAGED_LABEL}
+)
+# The labels this action creates, with a fixed colour and description, when the
+# repository lacks them. The type and duplicate labels are never created.
+CREATED_LABELS = {
+    NEEDS_INFO_LABEL: (NEEDS_INFO_COLOR, NEEDS_INFO_DESCRIPTION),
+    TRIAGED_LABEL: (TRIAGED_COLOR, TRIAGED_DESCRIPTION),
+}
 
 # Hidden in the comment so a second run can tell the issue was already answered.
 MARKER = "<!-- agent-triage:needs-info -->"
@@ -273,6 +284,11 @@ def make_plan(decision: Decision, repo_labels: frozenset[str]) -> Plan:
         if missing:
             comment = COMMENT_TEMPLATE.format(missing=missing)
             labels.append(NEEDS_INFO_LABEL)
+    # Always last, and always there: the model's answer was usable, so the issue has
+    # been through the triage even if there was nothing else to say about it. The label
+    # is what lets a person filter for issues not yet triaged, and what stops a second
+    # run from asking again.
+    labels.append(TRIAGED_LABEL)
     return Plan(comment=comment, labels=tuple(labels))
 
 
@@ -298,7 +314,7 @@ def github_request(
 def apply_plan(
     plan: Plan, repo: str, issue_number: int, token: str, repo_labels: frozenset[str]
 ) -> None:
-    """Write the comment, then the labels. A needs-info label is created if missing."""
+    """Write the comment, then the labels. Labels in CREATED_LABELS are created if missing."""
     if plan.comment:
         github_request(
             "POST",
@@ -307,30 +323,27 @@ def apply_plan(
             token,
             {"body": plan.comment},
         )
-    if NEEDS_INFO_LABEL in plan.labels and NEEDS_INFO_LABEL not in repo_labels:
-        try:
-            github_request(
-                "POST",
-                repo,
-                "/labels",
-                token,
-                {
-                    "name": NEEDS_INFO_LABEL,
-                    "color": NEEDS_INFO_COLOR,
-                    "description": NEEDS_INFO_DESCRIPTION,
-                },
-            )
-        except urllib.error.HTTPError as error:
-            if error.code != 422:  # 422: it was created in the meantime
-                raise
-    if plan.labels:
-        github_request(
-            "POST",
-            repo,
-            f"/issues/{issue_number}/labels",
-            token,
-            {"labels": list(plan.labels)},
-        )
+    for label in plan.labels:
+        if label in CREATED_LABELS and label not in repo_labels:
+            color, description = CREATED_LABELS[label]
+            try:
+                github_request(
+                    "POST",
+                    repo,
+                    "/labels",
+                    token,
+                    {"name": label, "color": color, "description": description},
+                )
+            except urllib.error.HTTPError as error:
+                if error.code != 422:  # 422: it was created in the meantime
+                    raise
+    github_request(
+        "POST",
+        repo,
+        f"/issues/{issue_number}/labels",
+        token,
+        {"labels": list(plan.labels)},
+    )
 
 
 def _read_instruction() -> str:
@@ -453,9 +466,6 @@ def run() -> None:
         f"duplicate_of={decision.duplicate_of} reason={log_text(decision.reason)}"
     )
     plan = make_plan(decision, repo_labels)
-    if not plan.comment and not plan.labels:
-        print(f"Nothing to write for #{issue.number}.")
-        return
     apply_plan(plan, repo, issue.number, token, repo_labels)
     print(
         f"Wrote to #{issue.number}: labels={list(plan.labels)} comment={bool(plan.comment)}"

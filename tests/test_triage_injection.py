@@ -124,7 +124,9 @@ def test_a_hostile_issue_is_still_triaged_normally(tmp_path: Path, name: str) ->
     title, body = _HOSTILE_ISSUES[name]
     api, chat = _run(tmp_path, _reply(), payload=_payload(title=title, body=body))
     chat.assert_called_once()
-    assert api.writes == [("POST", f"/issues/{ISSUE}/labels", {"labels": ["bug"]})]
+    assert api.writes == [
+        ("POST", f"/issues/{ISSUE}/labels", {"labels": ["bug", "triaged"]})
+    ]
 
 
 # --- the model is fooled ---
@@ -211,15 +213,17 @@ def _writes_are_safe(api: FakeGitHub) -> str | None:
             assert set(payload) == {"body"}
             comment = payload["body"]
         elif path == "/labels":
+            # Only the labels this action creates, with their fixed colour and text.
+            color, description = triage.CREATED_LABELS[payload["name"]]
             assert payload == {
-                "name": triage.NEEDS_INFO_LABEL,
-                "color": triage.NEEDS_INFO_COLOR,
-                "description": triage.NEEDS_INFO_DESCRIPTION,
+                "name": payload["name"],
+                "color": color,
+                "description": description,
             }
         elif path == f"/issues/{ISSUE}/labels":
             assert set(payload) == {"labels"}
             assert set(payload["labels"]) <= triage.TRIAGE_LABELS, payload
-            assert len(payload["labels"]) <= 3
+            assert len(payload["labels"]) <= 4
         else:
             pytest.fail(f"a write the design does not allow: {method} {path}")
     return comment
@@ -258,19 +262,21 @@ def test_a_fooled_model_cannot_make_the_action_write_anything_else(
 
 # Exactly what a fooled model gets written, as labels; None means nothing at all.
 _EXPECTED_LABELS: dict[str, list[str] | None] = {
-    "invents-a-label": None,
-    "adds-labels-of-its-own": ["bug"],
-    "closes-and-assigns": ["bug"],
-    "wants-a-label-by-name": None,
-    "type-is-a-list": None,
-    "duplicate-of-something-unseen": ["bug"],
-    "duplicate-of-itself": ["bug"],
-    "duplicate-is-a-string": ["bug"],
-    "needs-info-as-a-word": ["bug"],
-    "reply-in-prose-and-fence": ["enhancement"],
-    "two-objects": None,
-    "reason-is-an-attack": ["bug"],
-    **{f"missing-{name}": ["bug", "needs-info"] for name in _HOSTILE_MISSING},
+    "invents-a-label": ["triaged"],
+    "adds-labels-of-its-own": ["bug", "triaged"],
+    "closes-and-assigns": ["bug", "triaged"],
+    "wants-a-label-by-name": ["triaged"],
+    "type-is-a-list": ["triaged"],
+    "duplicate-of-something-unseen": ["bug", "triaged"],
+    "duplicate-of-itself": ["bug", "triaged"],
+    "duplicate-is-a-string": ["bug", "triaged"],
+    "needs-info-as-a-word": ["bug", "triaged"],
+    "reply-in-prose-and-fence": ["enhancement", "triaged"],
+    "two-objects": None,  # no usable answer, so nothing is written, not even triaged
+    "reason-is-an-attack": ["bug", "triaged"],
+    **{
+        f"missing-{name}": ["bug", "needs-info", "triaged"] for name in _HOSTILE_MISSING
+    },
 }
 
 
@@ -316,7 +322,9 @@ def test_only_hidden_text_is_not_a_question(tmp_path: Path) -> None:
     reply = _fooled(needs_info=True, missing=_hidden("CANARYHIDDEN") + "​")
     api = FakeGitHub()
     _run(tmp_path, reply, api)
-    assert api.writes == [("POST", f"/issues/{ISSUE}/labels", {"labels": ["bug"]})]
+    assert api.writes == [
+        ("POST", f"/issues/{ISSUE}/labels", {"labels": ["bug", "triaged"]})
+    ]
 
 
 # --- on GitHub's own renderer ---
