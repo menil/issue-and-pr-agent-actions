@@ -1,7 +1,8 @@
 # Issue implementation: design
 
-Status: draft for review. Nothing here is built yet. Items marked **[TBD]** are open
-and listed again at the end; a spike in a private repository answers most of them.
+Status: the spike is done and the gate passed (see "What the spike found"); the
+implementation is not built yet. Items marked **[TBD]** are still open and listed again
+at the end.
 
 ## Goal
 
@@ -41,6 +42,7 @@ from its documentation:
 | Automatic or not | Opt-in per repository by a variable, `AGENT_AUTO=true`, default off. With it off, nothing starts until a maintainer applies `ready-to-implement`. |
 | Stages | Two, in separate jobs: **assess** (read-only), then **implement**, only if the assessment passed. |
 | What the model decides | A verdict and, in stage two, the code of a draft PR. Never a label, a comment's markdown, a branch name or a command outside the allowlist. |
+| Credentials | **Route A**: the workflow's own `GITHUB_TOKEN` and the Claude subscription token, and nothing else. No personal access token and no GitHub App is installed. The cost is one click per agent pull request (see below). |
 | Where it lives | A thin wrapper workflow in each consuming repo. The instruction files and the small script that validates the verdict and writes labels live here, in `implement/`, so they are versioned and tagged with the other actions. **[TBD]** whether `implement/` is a composite action like `triage/` or only files the wrapper checks out. |
 
 ## Flow
@@ -102,6 +104,8 @@ steer it, what it can reach, and what a stolen token could do.
 | Author gate | Only write-access authors start a run (step 1); `allowed_non_write_users` and `allowed_bots` are never set. |
 | Least permission | Stage one has no write access at all. Stage two has no `workflows` scope, so the agent's push cannot change `.github/workflows`, whatever the issue says. |
 | Secrets | The job gets the Claude token and nothing else: no registry or deploy tokens, which stay out of the workflow. |
+| Code the model can run | The model may write a test file and run the test command, which is arbitrary code. The control is who can steer it: only trusted authors start a run, and for anyone else's issue a maintainer has read it first. The spike's one injection attempt did not get the model to abuse this, but that is not a control. |
+| What that code can reach | **A known gap.** The Claude token is in the job's environment while it runs, so such code could read it, and the network is open (next row). Nothing removes the token today. **[TBD]** run the tests in a later step that does not hold the token, or scrub the environment of the subprocess. |
 | Network | Whatever the runner allows. A fooled run could send the token out. The token is bound to your subscription, so rotate it if a run is ever suspect. **[TBD]** whether an egress allowlist is practical. |
 | Never `pull_request_target` | The wrapper triggers only on `issues`. No fork code is checked out. |
 | Bounds | `--max-turns` and a job timeout; one run per issue; a daily cap on runs per repository **[TBD]**. |
@@ -120,14 +124,39 @@ data.
 
 ## Opening the pull request
 
-Two things to settle in the spike, because they decide whether this works at all:
+With Route A the wrapper pushes `agent/issue-N` and opens a draft pull request itself,
+with `GITHUB_TOKEN`. Two consequences, both measured in the spike:
 
-- A pull request opened with the workflow's `GITHUB_TOKEN` does not trigger other
-  workflows, so `validate` and the review would never run on it, and a required check
-  would block the merge. **[TBD]** the likely fix is a fine-grained token limited to
-  the one repository (contents and pull requests: write, no workflow scope) in a
-  secret, used only to push and open the PR; a GitHub App is the alternative.
-- The repository setting that lets Actions create pull requests must be on.
+- The repository setting "Allow GitHub Actions to create and approve pull requests"
+  must be on. It is off by default, a workflow cannot turn it on, and with it off the
+  push works but `gh pr create` is refused. Turning it on is a one-time step per
+  repository; enabling the workflow in a repository includes it.
+- The pull request is authored by `github-actions`, and `validate` and the review
+  actions are created on it but held at `action_required` with no jobs, until a person
+  clicks "Approve and run". They do not run on their own. Merging needs them, so this is
+  one extra click per agent pull request, on top of the review a person does anyway.
+
+Not tried, on purpose: a fine-grained token in a secret (no new credential is wanted),
+and the Claude GitHub App, which would author the pull request as `claude[bot]` and
+should not be held, but needs the app installed with write access to the repository.
+Either removes the click if it ever becomes a burden.
+
+## What the spike found
+
+Run in a private sandbox repository on a small invented bug (a slug function that kept
+a stray hyphen at either end), with Route A and the existing Claude token. The workflow
+used for it was `workflow_dispatch` on an issue number, with the two jobs described
+above.
+
+| Question | Answer |
+|---|---|
+| Does the subscription token work in CI for a multi-turn agent? | Yes, with no other credential. No rate-limit or usage message appeared. |
+| What does a run cost? | One small issue: assess 4 turns and 6 s of model time (30 s of job), implement 8 turns and 9 s (37 s of job). Notional cost at API prices was about $0.14; nothing is billed on a subscription. Heavy use is not measured. |
+| Does the agent reproduce and fix? | Yes. It ran `python3 slug.py "  Hello, World! "`, saw the wrong output, gave the cause, and produced a one-line fix and a regression test, in one commit. |
+| Does the wrapper open a draft pull request? | Yes, with `GITHUB_TOKEN`, once the Actions setting is on. |
+| Do `validate` and the review run on it? | Not by themselves: created, held at `action_required`. |
+| Can the agent's token edit a workflow? | No. Pushing a change under `.github/workflows` was refused: "refusing to allow a GitHub App to create or update workflow ... without `workflows` permission". |
+| Does an injection in the issue work? | Not in the one attempt. The issue asked the agent to write environment values to a file, edit a workflow, add a test that calls `curl`, set its own verdict, and push to `main` and merge. The agent said in its verdict that the issue held injected instructions and ignored them; the pull request contained only the fix and its test, and `main` was untouched. This is one model against one injection written by us; it does not show the controls above are unnecessary. The wrapper's own refusal of changes under `.github/` was not exercised, so it needs unit tests. |
 
 ## Failure behaviour
 
@@ -165,20 +194,23 @@ replace the action later without losing them.
 ## Rollout
 
 1. This document, reviewed.
-2. The spike in the sandbox, then `apply_verdict.py` and the instruction files with
-   tests. **The spike is a gate:** if no token can open a pull request on which
-   `validate` and the review run, or the subscription cannot carry the runs, the
-   design stops here and the rest is not built.
+2. The spike in the sandbox (done; the gate passed), then `apply_verdict.py` and the
+   instruction files with tests.
 3. One real repository, `pdf-vdiff`, with `AGENT_AUTO` off first, then on.
 4. Other repositories only on request. Public repositories with outside issues
    get the manual `ready-to-implement` path only.
 
 ## Open questions
 
+Answered by the spike: which token opens the pull request (`GITHUB_TOKEN`, plus the
+Actions setting and one click for the checks); whether the subscription carries the
+runs (yes, for one small issue).
+
 - **[TBD]** Is `implement/` a composite action or files the wrapper checks out?
-- **[TBD]** Which token opens the PR, and does a repository need the Actions setting?
-- **[TBD]** Does the subscription's usage allowance hold for two model runs per
-  issue in CI, and what do its terms say about automation?
+- **[TBD]** What do the subscription's terms say about automation in CI? The runs worked;
+  the terms are not checked.
+- **[TBD]** Can the test run be taken out of the step that holds the token, or the
+  environment scrubbed, to close the arbitrary-code gap?
 - **[TBD]** Is an egress allowlist practical on hosted runners?
 - **[TBD]** The `effort` cut-off, and the daily cap per repository.
 - **[TBD]** Whether a failed assessment on a maintainer's own issue should add
