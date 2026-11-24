@@ -14,7 +14,7 @@ from test_action_yml import _declared_inputs
 
 ROOT = Path(__file__).resolve().parent.parent
 TEXT = (ROOT / "implement" / "example-workflow.yml").read_text(encoding="utf-8")
-JOBS = ("assess", "report", "fix", "notify")
+JOBS = ("assess", "report", "fix", "notify", "finish")
 
 
 def _job(name: str) -> str:
@@ -203,6 +203,7 @@ def test_each_job_asks_for_exactly_what_it_needs() -> None:
     assert _permissions(_job("assess")) == {"contents": "read", "issues": "read"}
     assert _permissions(_job("report")) == {"issues": "write"}
     assert _permissions(_job("notify")) == {"issues": "write"}
+    assert _permissions(_job("finish")) == {"issues": "write"}
     assert _permissions(_job("fix")) == {
         "contents": "write",
         "pull-requests": "write",
@@ -230,7 +231,7 @@ def test_only_the_jobs_that_run_the_model_see_the_claude_token() -> None:
     assert "secrets." not in _job("notify")
 
 
-@pytest.mark.parametrize("name", ["report", "notify"])
+@pytest.mark.parametrize("name", ["report", "notify", "finish"])
 def test_the_jobs_that_only_write_a_comment_check_nothing_out(name: str) -> None:
     assert "checkout" not in _job(name)
 
@@ -557,3 +558,24 @@ def _run_number_step(
         text=True,
     )
     return done, out.read_text()
+
+
+# --- tidying the issue once the pull request is open ---
+
+
+def test_the_issue_is_tidied_only_after_a_fix_that_opened_a_pull_request() -> None:
+    assert re.search(r"(?m)^    needs: fix$", _job("finish"))
+    assert _condition("finish") == "needs.fix.outputs.pull_request != ''"
+
+
+def test_a_failed_tidy_does_not_fail_the_run_or_comment_on_the_issue() -> None:
+    assert re.search(r"(?m)^    continue-on-error: true$", _job("finish"))
+    assert "finish" not in re.search(r"needs: \[([^\]]*)\]", _job("notify")).group(1)  # type: ignore[union-attr]
+
+
+def test_the_tidy_job_gets_no_secret_and_only_the_issue_write_permission() -> None:
+    job = _job("finish")
+    assert "secrets." not in job and "checkout" not in job
+    assert _permissions(job) == {"issues": "write"}
+    assert "pull_request_url: ${{ needs.fix.outputs.pull_request }}" in job
+    assert "issue_number: ${{ github.event.issue.number }}" in job

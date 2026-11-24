@@ -771,6 +771,35 @@ def apply_report(
     )
 
 
+# --- the issue, once the pull request is open ---
+
+TRIGGER_LABEL = "ready-to-implement"
+OPENED_LABEL = "pr-open"
+PR_OPEN_COLOR = "8250df"
+PR_OPEN_DESCRIPTION = "A pull request was opened for this issue"
+
+
+def opened_comment(pull_request: int) -> str:
+    """The one comment left on the issue. Its marker names the pull request, so a later
+    attempt that opens another one is told too, and a repeated run is not told twice."""
+    return (
+        f"A pull request was opened for this issue: #{pull_request}. A model wrote it; "
+        "nothing has been merged or approved, and a person has to review it.\n\n"
+        f"<!-- agent-implement:opened:{pull_request} -->"
+    )
+
+
+def pull_request_number(url: str, repo: str) -> int:
+    """The number in the URL of a pull request of this repository, in that exact form.
+    Owner and repository names are compared without regard to case, as GitHub does."""
+    match = re.fullmatch(
+        rf"https://github\.com/(?i:{re.escape(repo)})/pull/([0-9]+)", url
+    )
+    if not match:
+        raise ValueError("not the URL of a pull request of this repository")
+    return int(match.group(1))
+
+
 # --- the commands ---
 
 
@@ -929,6 +958,46 @@ def run_notify(kind: str) -> None:
     print(f"Left the {kind} comment on #{number}.")
 
 
+def run_finish() -> None:
+    """Tidy the issue once its pull request is open: the trigger label comes off, the status
+    label goes on, and one comment links the pull request. All of it is fixed text and fixed
+    labels; the only input is the pull request's number, taken from its URL.
+
+    The comment is last because its marker says the issue was tidied: if a step before it
+    fails, a second run starts over instead of stopping with the work half done."""
+    repo, token, number = _settings()
+    try:
+        pull_request = pull_request_number(os.environ.get("PULL_REQUEST_URL", ""), repo)
+    except ValueError:
+        _fail("PULL_REQUEST_URL is not the URL of a pull request of this repository.")
+    try:
+        triage.github_request(
+            "DELETE", repo, f"/issues/{number}/labels/{TRIGGER_LABEL}", token
+        )
+    except urllib.error.HTTPError as error:
+        if error.code != 404:  # 404: the label was not on the issue
+            raise
+    triage.create_label(repo, token, OPENED_LABEL, PR_OPEN_COLOR, PR_OPEN_DESCRIPTION)
+    triage.github_request(
+        "POST", repo, f"/issues/{number}/labels", token, {"labels": [OPENED_LABEL]}
+    )
+    comments = triage.github_request(
+        "GET", repo, f"/issues/{number}/comments?per_page=100", token
+    )
+    marker = f"<!-- agent-implement:opened:{pull_request} -->"
+    if has_marker(comments if isinstance(comments, list) else [], marker):
+        print(f"#{number} has already been told about #{pull_request}.")
+        return
+    triage.github_request(
+        "POST",
+        repo,
+        f"/issues/{number}/comments",
+        token,
+        {"body": opened_comment(pull_request)},
+    )
+    print(f"Tidied #{number}: pull request #{pull_request} is open.")
+
+
 def run_check_tools() -> None:
     problems = check_command_tools(os.environ.get("COMMAND_TOOLS", ""))
     if problems:
@@ -998,6 +1067,7 @@ COMMANDS = {
     "check-changes": run_check_changes,
     "check-tools": run_check_tools,
     "check-cap": run_check_cap,
+    "finish": run_finish,
 }
 
 

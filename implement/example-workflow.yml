@@ -165,6 +165,25 @@ jobs:
           pull_request_number: ${{ steps.pr.outputs.number }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
+  # Tidies the issue once the pull request is open: takes off ready-to-implement, puts on
+  # pr-open and leaves one comment with the link. Fixed labels and text, no model, and only
+  # the permission to write to issues. A failure here does not fail the run.
+  finish:
+    needs: fix
+    if: needs.fix.outputs.pull_request != ''
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Tidy the issue
+        # EDIT: the same release tag as above.
+        uses: menil/pr-code-review-action/implement/finish@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          pull_request_url: ${{ needs.fix.outputs.pull_request }}
+
   # One comment, once per issue, if any stage above failed, so a failure is not silent.
   notify:
     needs: [assess, report, fix]

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-NAMES = ("assess", "report", "fix", "notify")
+NAMES = ("assess", "report", "fix", "notify", "finish")
 TEXT = {
     name: (ROOT / "implement" / name / "action.yml").read_text(encoding="utf-8")
     for name in NAMES
@@ -96,7 +96,7 @@ def test_no_way_around_the_write_access_check_is_switched_on(name: str) -> None:
 # --- the model ---
 
 
-@pytest.mark.parametrize("name", ["report", "notify"])
+@pytest.mark.parametrize("name", ["report", "notify", "finish"])
 def test_the_stages_that_write_to_the_issue_have_no_model_and_no_token(
     name: str,
 ) -> None:
@@ -297,3 +297,15 @@ def test_the_draft_input_defaults_to_a_pull_request_ready_for_review() -> None:
     assert "required: true" not in block.group(1)
     assert "default: 'false'" in block.group(1)
     assert "DRAFT: ${{ inputs.draft }}" in action
+
+
+def test_finish_takes_the_url_and_the_number_and_nothing_else_from_the_workflow() -> (
+    None
+):
+    action = TEXT["finish"]
+    step = next(s for s in _steps("finish") if "implement.py finish" in s)
+    assert "ISSUE_NUMBER: ${{ inputs.issue_number }}" in step
+    assert "PULL_REQUEST_URL: ${{ inputs.pull_request_url }}" in step
+    assert "GITHUB_TOKEN: ${{ inputs.github_token }}" in step
+    assert "inputs.pull_request_url" not in action.replace(step, "")  # only in env
+    assert MODEL_ACTION not in action and "actions/checkout" not in action

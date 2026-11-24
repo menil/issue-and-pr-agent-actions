@@ -191,11 +191,13 @@ What it does and does not do:
 > [!NOTE]
 > Available from `v1.3.0`. A workflow pinned to `@v1.2.0` or earlier does not have it.
 
-Three more actions under `implement/` take an issue from "reported" to a **pull request**, ready for a person to review. They are used from one workflow, [`implement/example-workflow.yml`](implement/example-workflow.yml), copied into the repository. The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
+More actions under `implement/` take an issue from "reported" to a **pull request**, ready for a person to review. They are used from one workflow, [`implement/example-workflow.yml`](implement/example-workflow.yml), copied into the repository. The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
 
 1. **`implement/assess`** reads the issue and runs a model with read-only tools to decide whether it is real, whether it reproduces and how large the fix would be. It returns a verdict.
 2. **`implement/report`** (no model) checks the verdict against a fixed contract, adds `repro:*` and `effort:*` labels from a fixed table, posts one comment, and says whether to go on. It goes on only if the issue is valid, not large, and either reproduced, confirmed by reading the code (`repro:by-reading`), or a change request.
 3. **`implement/fix`** lets a model write a test that shows the problem, see it fail, fix the code and see it pass (it changes nothing if it cannot make the test fail), then code refuses anything that must not be committed, pushes a branch named `agent/issue-N-` and a few words from the change's title (for example `agent/issue-63-report-encrypted-pdfs`) and opens a pull request that is ready for review (a draft only if you set `draft: 'true'` on the step: a draft would be reviewed again when marked ready, and a person reviews it either way). The model also writes a short description of its change (`.agent-change.md`: a type, a title, what it changed and why, and what it left undone). Code checks it and turns it into the commit message and the pull request text; a pull request that leaves part of the issue undone says `Refs #N` instead of `Closes #N`, so merging it does not close the issue. If the file is missing or wrong, the generic text `fix: address issue #N` is used and the run is not lost.
+
+4. **`implement/finish`** (no model) tidies the issue once the pull request is open: it takes off `ready-to-implement`, puts on `pr-open` and leaves one comment with the link, from fixed labels and text. It runs in its own job with `issues: write` and nothing else, and a failure there does not fail the run. Nothing removes `pr-open` when the pull request is merged or closed, so take it off by hand if you run the issue again.
 
 The model never merges, approves, labels, or touches `.github/`, lockfiles, hooks or agent configuration; the last is enforced by code, not by asking.
 
@@ -203,7 +205,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 - **An issue opened by an owner, member or collaborator**, when the repository variable `AGENT_AUTO` is `true`. Off by default.
 - **The `ready-to-implement` label**, whoever wrote the issue. The person who applied it must have write access (the action checks, whoever the author is), so a stranger's issue only runs because a maintainer chose it.
-- **Never** for a bot, for an issue labelled `no-agent`, or for one that already has a `repro:*` label. To run an assessed issue again, remove its `repro:*` labels and the assessment comment, and delete its `agent/issue-N` or `agent/issue-N-*` branch if the fix got that far; applying `ready-to-implement` again does nothing until then.
+- **Never** for a bot, for an issue labelled `no-agent`, or for one that already has a `repro:*` label. To run an assessed issue again, remove its `repro:*` labels and the assessment comment, and delete its `agent/issue-N` or `agent/issue-N-*` branch if the fix got that far, and take off `pr-open` if it is there; applying `ready-to-implement` again does nothing until then.
 - **Not past the daily limit.** At most `AGENT_DAILY_CAP` assessments (default 5, `0` pauses everything) in 24 hours, counted from the assessment comments the workflow has left. An issue the limit stops gets one comment saying so; apply `ready-to-implement` again later. It is a soft limit: runs that start side by side can pass it together, so a burst of issues can overshoot by its size.
 
 ### Setting it up

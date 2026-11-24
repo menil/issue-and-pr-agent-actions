@@ -1,0 +1,35 @@
+name: 'AI Issue Implementation: finish'
+description: 'Tidies the issue once its pull request is open: takes off ready-to-implement, puts on pr-open and leaves one comment with the link, at most once per pull request. No model runs here, and the labels and text are fixed. Part of the implementation action (docs/implement-action.md).'
+author: 'meni'
+branding:
+  icon: 'check-circle'
+  color: 'purple'
+
+# Needs no checkout. Give the job issues: write and nothing else.
+inputs:
+  github_token:
+    description: 'GITHUB_TOKEN to change the labels and write the comment (issues: write)'
+    required: false
+    default: '${{ github.token }}'
+  issue_number:
+    description: 'Number of the issue the pull request was opened for'
+    required: true
+  pull_request_url:
+    description: 'The URL of the pull request, as the fix action outputs it. Only the exact form of a pull request of this repository is accepted.'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+
+    - name: Tidy the issue
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
+      run: python ${{ github.action_path }}/../../src/implement.py finish
