@@ -202,7 +202,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 - **An issue opened by an owner, member or collaborator**, when the repository variable `AGENT_AUTO` is `true`. Off by default.
 - **The `ready-to-implement` label**, whoever wrote the issue. The person who applied it must have write access (the action checks, whoever the author is), so a stranger's issue only runs because a maintainer chose it.
-- **Never** for a bot, for an issue labelled `no-agent`, or for one that already has a `repro:*` label. To run an assessed issue again, remove its `repro:*` labels.
+- **Never** for a bot, for an issue labelled `no-agent`, or for one that already has a `repro:*` label. To run an assessed issue again, remove its `repro:*` labels and the assessment comment, and delete its `agent/issue-N` branch if the fix got that far; applying `ready-to-implement` again does nothing until then.
 - **Not past the daily limit.** At most `AGENT_DAILY_CAP` assessments (default 5, `0` pauses everything) in 24 hours, counted from the assessment comments the workflow has left. An issue the limit stops gets one comment saying so; apply `ready-to-implement` again later. It is a soft limit: runs that start side by side can pass it together, so a burst of issues can overshoot by its size.
 
 ### Setting it up

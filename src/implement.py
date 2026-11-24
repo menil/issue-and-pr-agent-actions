@@ -697,8 +697,9 @@ def run_notify(kind: str) -> None:
         body = (
             "A run for this issue failed before it finished, so no pull request was "
             f"opened by it. Nothing was merged, approved or closed.{log}\n\n"
-            "A maintainer can try again by removing and re-applying "
-            f"`ready-to-implement`.\n\n{FAILED_MARKER}"
+            "To try again, a maintainer removes any `repro:` labels, deletes the "
+            f"assessment comment and the `agent/issue-{number}` branch if they exist, "
+            f"and applies `ready-to-implement` again.\n\n{FAILED_MARKER}"
         )
     triage.github_request(
         "POST", repo, f"/issues/{number}/comments", token, {"body": body}

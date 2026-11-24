@@ -236,6 +236,10 @@ def test_a_failed_run_gets_one_comment_with_a_link_to_it(
     body = api.writes[0][2]["body"]
     assert "https://github.com/o/r/actions/runs/4242" in body
     assert body.count(FAILED_MARKER) == 1 and "no pull request" in body.lower()
+    # Re-applying the label alone does nothing once an issue has been assessed, so the
+    # comment must say what actually has to be undone first.
+    assert "repro:" in body and "assessment comment" in body
+    assert "`agent/issue-17`" in body and "`ready-to-implement`" in body
 
 
 def test_a_failed_run_is_not_reported_twice(
