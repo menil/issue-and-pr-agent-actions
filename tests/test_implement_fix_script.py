@@ -34,6 +34,11 @@ class Sandbox:
         gh = self.bin / "gh"
         gh.write_text(
             f'#!/bin/sh\necho "$@" >> "{self.gh_log}"\n'
+            "prev=''\n"
+            'for arg in "$@"; do\n'
+            f'  if [ "$prev" = "--body-file" ]; then cp "$arg" "{tmp_path}/pr_body.md"; fi\n'
+            '  prev="$arg"\n'
+            "done\n"
             'if [ -n "$GH_FAIL" ]; then\n'
             '  echo "GraphQL: GitHub Actions is not permitted to create or approve pull requests'
             ' (createPullRequest)" >&2\n'
@@ -80,7 +85,7 @@ class Sandbox:
         # What `fetch` does: the issue file exists but can never be committed.
         (self.work / ".git" / "info").mkdir(exist_ok=True)
         with open(self.work / ".git" / "info" / "exclude", "a") as f:
-            f.write(".agent-issue.md\n")
+            f.write(".agent-issue.md\n.agent-change.md\n")
         self.write(".agent-issue.md", "# the issue\n")
 
     def env(self, **overrides: str) -> dict[str, str]:
@@ -173,6 +178,99 @@ def test_the_issue_file_is_never_committed(box: Sandbox) -> None:
     box.run()
     tree = box._git(box.work, "ls-tree", "-r", "--name-only", "HEAD")
     assert ".agent-issue.md" not in tree.split()
+
+
+CHANGE = """\
+Type: fix
+Title: return PasswordProtected for encrypted PDFs
+Not done: InvalidDimensions is still never constructed
+
+Opening an encrypted PDF printed a raw error. The load error is now mapped.
+"""
+
+
+def test_the_model_s_description_becomes_the_commit_and_the_pull_request_text(
+    box: Sandbox,
+) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(".agent-change.md", CHANGE)
+    done = box.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    message = box._git(box.work, "log", "-1", "--format=%B", "HEAD")
+    assert message.startswith("fix: return PasswordProtected for encrypted PDFs\n\n")
+    assert "Opening an encrypted PDF printed a raw error." in message
+    assert message.rstrip().endswith("Refs #17")
+    log = box.gh_log.read_text()
+    assert "--title fix: return PasswordProtected for encrypted PDFs" in log
+    body = (box.root / "pr_body.md").read_text()
+    assert body.startswith("Opening an encrypted PDF printed a raw error.")
+    assert "Not done" in body and body.rstrip().endswith("Refs #17")
+    assert "Closes" not in body
+    assert "pull_request_url=https://github.com/o/r/pull/99" in box.output.read_text()
+
+
+def test_a_complete_change_closes_the_issue(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(
+        ".agent-change.md", "Type: feat\nTitle: add the flag\n\nIt adds the flag.\n"
+    )
+    assert box.run().returncode == 0
+    assert (box.root / "pr_body.md").read_text().rstrip().endswith("Closes #17")
+    assert box._git(box.work, "log", "-1", "--format=%s", "HEAD").strip() == (
+        "feat: add the flag"
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "no header at all",
+        "Type: chore\nTitle: x\n\nbody\n",
+        "Type: fix\nTitle: x\n",
+    ],
+)
+def test_a_description_outside_the_contract_does_not_cost_the_fix(
+    box: Sandbox, content: str
+) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(".agent-change.md", content)
+    done = box.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert box._git(box.work, "log", "-1", "--format=%s", "HEAD").strip() == (
+        "fix: address issue #17"
+    )
+    assert (box.root / "pr_body.md").read_text().rstrip().endswith("Closes #17")
+
+
+def test_the_description_file_is_never_committed(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(".agent-change.md", CHANGE)
+    box.run()
+    tree = box._git(box.work, "ls-tree", "-r", "--name-only", "HEAD")
+    assert ".agent-change.md" not in tree.split()
+
+
+def test_a_description_alone_is_not_a_change(box: Sandbox) -> None:
+    box.write(".agent-change.md", CHANGE)
+    done = box.run()
+    assert done.returncode != 0
+    assert box.remote_branches() == ["main"] and box.gh_calls() == []
+
+
+def test_a_hostile_title_cannot_become_an_option_or_a_second_command(
+    box: Sandbox,
+) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(
+        ".agent-change.md",
+        "Type: fix\nTitle: --web $(touch /tmp/pwned_by_title) `id` ; rm -rf x\n\nb\n",
+    )
+    assert box.run().returncode == 0
+    subject = box._git(box.work, "log", "-1", "--format=%s", "HEAD").strip()
+    assert subject.startswith("fix: ")
+    assert "$" not in subject and "`" not in subject
+    assert not Path("/tmp/pwned_by_title").exists()
 
 
 @pytest.mark.parametrize(

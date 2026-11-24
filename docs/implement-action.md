@@ -167,6 +167,31 @@ and the Claude GitHub App, which would author the pull request as `claude[bot]` 
 should not be held, but needs the app installed with write access to the repository.
 Either removes the click if it ever becomes a burden.
 
+## The text of the commit and the pull request
+
+The first runs used one fixed title, `fix: address issue #N`, and a body that only pointed
+at the issue. A reviewer learned nothing from either. The fix stage now asks the model to
+write `.agent-change.md` last: a header (`Type:`, `Title:`, an optional `Not done:`), a
+blank line, then what it changed and why. Code reads it under a contract and writes the
+commit message and the pull request text itself.
+
+- **What the model chooses:** words. The type is one of `fix`, `feat`, `test`, `refactor`,
+  `docs`, `perf` (never `chore` or a release type). The title is reduced to plain words: markup,
+  links, mentions and issue references are dropped, and the type is added by code, so
+  the line is under 72 characters and cut at a word. The description and the not-done line pass
+  through the same sanitiser as the assessment comment, so nothing in them can ping a
+  person, link, or hide text. The commit body is that text wrapped under 72 columns.
+- **What code chooses:** the closing line. A change with no `Not done:` closes the issue
+  (`Closes #N`); one with it says `Refs #N`, so merging it does not close an issue that is
+  only partly done. The model's own prose cannot carry a closing keyword, because the
+  sanitiser shows any `#N` it writes as code.
+- **If the file is wrong:** a missing file, a bad type, a missing title or description, or
+  text that cannot be made safe all fall back to the generic text, with a log line that
+  does not repeat what the model wrote. A wording problem never costs the fix.
+- **The file is never committed.** `fetch` lists it in `.git/info/exclude` before the model
+  starts, the changed-file check treats the name as protected, and a run whose only change
+  is that file still counts as no change.
+
 ## What the spike found
 
 Run in a private sandbox repository on a small invented bug (a slug function that kept
