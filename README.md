@@ -188,7 +188,7 @@ What it does and does not do:
 ## Issue implementation
 
 > [!NOTE]
-> Not released yet. These actions are on `main`; a release tag that contains them comes after the first repository has used them. Until then pin to a commit.
+> Available from `v1.3.0`. A workflow pinned to `@v1.2.0` or earlier does not have it.
 
 Three more actions under `implement/` take an issue from "reported" to a **draft pull request**, for a person to review. They are used from one workflow, [`implement/example-workflow.yml`](implement/example-workflow.yml), copied into the repository. The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
 
