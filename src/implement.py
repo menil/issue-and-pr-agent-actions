@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Shared code of the issue implementation actions (design: docs/implement-action.md).
 
-Two commands, run by the composite actions under implement/:
+Commands, run by the composite actions under implement/:
 
-  fetch   Read an issue, refuse it unless a trusted person stands behind it, and write
-          it to a file for the model to read.
-  report  Validate the model's verdict, write the labels and the one comment, and say
-          whether the next stage may go ahead.
+  fetch          Read an issue, refuse it unless a trusted person stands behind it, and
+                 write it to a file for the model to read.
+  schema         Print the JSON schema of the verdict, built from the contract below.
+  prompt STAGE   Build the model's prompt: the stage's instruction file, then the
+                 repository's own notes. STAGE is assess or fix.
+  report         Validate the model's verdict, write the labels and the one comment, and
+                 say whether the next stage may go ahead.
+  check-changes  Read the paths the model changed (NUL-separated, on stdin) and refuse
+                 anything that must not be committed.
 
 The model never decides what is written. It returns a verdict; this code checks every
 field against a fixed contract, picks the labels from a fixed table, and builds the
@@ -15,16 +20,20 @@ comment from a template around sanitized text.
 
 import json
 import os
+import posixpath
 import re
 import sys
 import urllib.error
 import urllib.parse
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, NoReturn
 
 import triage
-from sanitize import sanitize_or_drop, strip_invisible_chars
+from sanitize import log_text, sanitize_or_drop, strip_invisible_chars
 
 # Who may start a run: the author's association with the repository, as GitHub reports it,
 # or a person with write access who applied the label to someone else's issue.
@@ -61,6 +70,44 @@ REPRO_LABELS = {
 # Hidden in the comment: once it is there the issue has been assessed, so a second run
 # stops before asking the model again.
 MARKER = "<!-- agent-implement:assessment -->"
+
+# The model is told the repository's commands in notes the maintainer writes; cap them so
+# a runaway file cannot crowd out the instructions.
+MAX_NOTES_CHARS = 4000
+STAGES = ("assess", "fix")
+INSTRUCTION_DIR = Path(__file__).resolve().parent.parent / "implement"
+
+# What the model may not have changed, enforced here because the instruction not to is
+# only a request. A fix has no business in the workflows, the hooks, the agent
+# configuration, the dependencies' lockfiles or the files that decide who reviews.
+MAX_CHANGED_FILES = 25
+PROTECTED_TOP_DIRS = frozenset(
+    {".github", ".git", ".githooks", ".claude", ".codex", ".agents"}
+)
+PROTECTED_NAMES = frozenset(
+    {".gitmodules", ".gitattributes", ".agent-issue.md", "codeowners"}
+)
+LOCKFILES = frozenset(
+    {
+        "cargo.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lock",
+        "bun.lockb",
+        "poetry.lock",
+        "uv.lock",
+        "pipfile.lock",
+        "flake.lock",
+        "go.sum",
+        "gemfile.lock",
+        "composer.lock",
+        "mix.lock",
+        "pubspec.lock",
+        "gradle.lockfile",
+        "packages.lock.json",
+    }
+)
 
 ISSUE_FILE = Path(".agent-issue.md")
 EXCLUDE_FILE = Path(".git/info/exclude")
@@ -216,6 +263,74 @@ def gate(verdict: Verdict) -> bool:
         and verdict.reproduced in ("yes", "not_applicable")
         and verdict.effort != "large"
     )
+
+
+def verdict_schema() -> dict[str, Any]:
+    """The JSON schema of the verdict, from the same constants the code validates against,
+    so what the model is asked for and what is accepted cannot drift apart."""
+    return {
+        "type": "object",
+        "properties": {
+            "valid": {"enum": list(VALID_VALUES)},
+            "reproduced": {"enum": list(REPRODUCED_VALUES)},
+            "effort": {"enum": list(EFFORT_VALUES)},
+            "evidence": {"type": "string", "maxLength": MAX_EVIDENCE_CHARS},
+            "summary": {"type": "string", "maxLength": MAX_SUMMARY_CHARS},
+        },
+        "required": ["valid", "reproduced", "effort", "evidence", "summary"],
+        "additionalProperties": False,
+    }
+
+
+def build_prompt(stage: str, notes: str) -> str:
+    """The instruction file for a stage, followed by the repository's notes."""
+    if stage not in STAGES:
+        raise ValueError("unknown stage")
+    instruction = (INSTRUCTION_DIR / f"{stage}_instruction.md").read_text(
+        encoding="utf-8"
+    )
+    cleaned = strip_invisible_chars(notes).strip()[:MAX_NOTES_CHARS]
+    body = cleaned or "(The maintainer gave no notes.)"
+    return f"{instruction.rstrip()}\n\n## Repository notes\n\n{body}\n"
+
+
+# --- what may be committed ---
+
+
+def _path_problem(raw: str) -> str | None:
+    if not raw:
+        return "an empty path"
+    if "\ufffd" in raw:
+        return "a path that is not valid text"
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        return "a control character in a path"
+    if raw.startswith("/"):
+        return "an absolute path"
+    if ".." in raw.split("/"):
+        return "a parent-directory component in a path"
+    parts = posixpath.normpath(raw).lower().split("/")
+    if parts[0] in PROTECTED_TOP_DIRS:
+        return f"a change under {parts[0]}"
+    if parts[-1] in PROTECTED_NAMES:
+        return "a change to a protected file"
+    if parts[-1] in LOCKFILES:
+        return "a change to a lockfile"
+    return None
+
+
+def check_changes(paths: list[str]) -> list[str]:
+    """What is wrong with these changed paths, if anything. Empty means they may be
+    committed. Each entry quotes a path only through log_text, so it is safe to print."""
+    problems: list[str] = []
+    if len(paths) > MAX_CHANGED_FILES:
+        problems.append(
+            f"{len(paths)} files changed; at most {MAX_CHANGED_FILES} are allowed"
+        )
+    for raw in paths:
+        problem = _path_problem(raw)
+        if problem:
+            problems.append(f"{problem}: {log_text(raw)}")
+    return problems
 
 
 # --- what is written ---
@@ -374,15 +489,62 @@ def run_report() -> None:
     _set_output("proceed", str(report.proceed).lower())
 
 
-COMMANDS = {"fetch": run_fetch, "report": run_report}
+def run_schema() -> None:
+    _set_output("schema", json.dumps(verdict_schema(), separators=(",", ":")))
+
+
+def run_prompt(stage: str) -> None:
+    prompt = build_prompt(stage, os.environ.get("REPO_NOTES", ""))
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        print(prompt)
+        return
+    # A multi-line output needs a delimiter line the text cannot contain.
+    delimiter = f"ghadelimiter_{uuid.uuid4().hex}"
+    while delimiter in prompt:
+        delimiter = f"ghadelimiter_{uuid.uuid4().hex}"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"prompt<<{delimiter}\n{prompt}\n{delimiter}\n")
+
+
+def run_check_changes() -> None:
+    raw = sys.stdin.buffer.read()
+    paths = [
+        chunk.decode("utf-8", errors="replace") for chunk in raw.split(b"\0") if chunk
+    ]
+    if not paths:
+        _fail("The agent made no changes.")
+    problems = check_changes(paths)
+    if problems:
+        for problem in problems[:5]:
+            print(f"::error::Refusing to commit: {problem}")
+        _fail(
+            f"{len(problems)} problem(s) with the changed files; nothing was committed."
+        )
+    print(f"{len(paths)} changed file(s); none is protected.")
+
+
+COMMANDS = {
+    "fetch": run_fetch,
+    "schema": run_schema,
+    "report": run_report,
+    "check-changes": run_check_changes,
+}
 
 
 def main(argv: list[str]) -> None:
-    if len(argv) != 1 or argv[0] not in COMMANDS:
-        print(f"usage: implement.py {{{'|'.join(COMMANDS)}}}", file=sys.stderr)
+    command, args = (argv[0], argv[1:]) if argv else ("", [])
+    handler: Callable[[], None]
+    if command == "prompt" and len(args) == 1 and args[0] in STAGES:
+        handler = partial(run_prompt, args[0])
+    elif command in COMMANDS and not args:
+        handler = COMMANDS[command]
+    else:
+        names = "|".join([*COMMANDS, "prompt {" + "|".join(STAGES) + "}"])
+        print(f"usage: implement.py {{{names}}}", file=sys.stderr)
         sys.exit(2)
     try:
-        COMMANDS[argv[0]]()
+        handler()
     except urllib.error.HTTPError as error:
         _fail(f"GitHub answered {error.code}; nothing more was done.")
 

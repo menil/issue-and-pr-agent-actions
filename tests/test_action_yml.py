@@ -9,26 +9,53 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 # What the runner provides to every step, so action.yml does not have to set it.
-PROVIDED_BY_THE_RUNNER = {"GITHUB_EVENT_PATH"}
+PROVIDED_BY_THE_RUNNER = {"GITHUB_EVENT_PATH", "GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
 
+# The last value is the environment variables the code reads that this action's stage
+# does not need: implement.py serves three actions, and each uses some of what it reads.
 ACTIONS = [
     pytest.param(
         ROOT / "action.yml",
         ["src/pr_review.py", "src/llm.py"],
         "src/pr_review.py",
+        set(),
         id="review",
     ),
     pytest.param(
         ROOT / "triage" / "action.yml",
         ["src/triage.py", "src/llm.py"],
         "src/triage.py",
+        set(),
         id="triage",
+    ),
+    pytest.param(
+        ROOT / "implement" / "assess" / "action.yml",
+        ["src/implement.py"],
+        "src/implement.py",
+        {"VERDICT"},
+        id="implement-assess",
+    ),
+    pytest.param(
+        ROOT / "implement" / "report" / "action.yml",
+        ["src/implement.py"],
+        "src/implement.py",
+        {"REPO_NOTES", "ACTOR_LOGIN"},
+        id="implement-report",
+    ),
+    pytest.param(
+        ROOT / "implement" / "fix" / "action.yml",
+        ["src/implement.py"],
+        "src/implement.py",
+        {"VERDICT"},
+        id="implement-fix",
     ),
 ]
 
 
 def _declared_inputs(text: str) -> set[str]:
-    block = text.split("\ninputs:\n", 1)[1].split("\nruns:\n", 1)[0]
+    block = text.split("\ninputs:\n", 1)[1]
+    # An action may declare outputs between its inputs and its steps.
+    block = block.split("\noutputs:\n", 1)[0].split("\nruns:\n", 1)[0]
     return set(re.findall(r"^  (\w+):\s*$", block, flags=re.MULTILINE))
 
 
@@ -48,35 +75,35 @@ def _env_names_read(sources: list[str]) -> set[str]:
     return names - PROVIDED_BY_THE_RUNNER
 
 
-@pytest.mark.parametrize(("action", "sources", "script"), ACTIONS)
+@pytest.mark.parametrize(("action", "sources", "script", "unused_env"), ACTIONS)
 def test_every_input_that_is_used_is_declared(
-    action: Path, sources: list[str], script: str
+    action: Path, sources: list[str], script: str, unused_env: set[str]
 ) -> None:
     text = action.read_text()
     used = set(re.findall(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", text))
     assert used <= _declared_inputs(text), used - _declared_inputs(text)
 
 
-@pytest.mark.parametrize(("action", "sources", "script"), ACTIONS)
+@pytest.mark.parametrize(("action", "sources", "script", "unused_env"), ACTIONS)
 def test_every_declared_input_is_used(
-    action: Path, sources: list[str], script: str
+    action: Path, sources: list[str], script: str, unused_env: set[str]
 ) -> None:
     text = action.read_text()
     used = set(re.findall(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", text))
     assert _declared_inputs(text) == used
 
 
-@pytest.mark.parametrize(("action", "sources", "script"), ACTIONS)
+@pytest.mark.parametrize(("action", "sources", "script", "unused_env"), ACTIONS)
 def test_every_environment_variable_the_code_reads_is_set(
-    action: Path, sources: list[str], script: str
+    action: Path, sources: list[str], script: str, unused_env: set[str]
 ) -> None:
-    missing = _env_names_read(sources) - _env_names_set(action.read_text())
+    missing = _env_names_read(sources) - _env_names_set(action.read_text()) - unused_env
     assert not missing, missing
 
 
-@pytest.mark.parametrize(("action", "sources", "script"), ACTIONS)
+@pytest.mark.parametrize(("action", "sources", "script", "unused_env"), ACTIONS)
 def test_the_action_runs_a_script_that_exists(
-    action: Path, sources: list[str], script: str
+    action: Path, sources: list[str], script: str, unused_env: set[str]
 ) -> None:
     match = re.search(
         r"run: python \$\{\{ github\.action_path \}\}/([^\s]+)", action.read_text()
