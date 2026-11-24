@@ -43,7 +43,7 @@ from its documentation:
 | Stages | Three jobs, because a job's permissions are fixed for all its steps: **assess** (model, read-only), **report** (code only, `issues: write`), then **fix** (model, `contents` and `pull-requests: write`), only if the gate passed. |
 | What the model decides | A verdict and, in stage two, the code of a PR. Never a label, a comment's markdown, a branch name or a command outside the allowlist. |
 | Credentials | **Route A**: the workflow's own `GITHUB_TOKEN` and the Claude subscription token, and nothing else. No personal access token and no GitHub App is installed. The cost is one click per agent pull request (see below). |
-| Where it lives | Three composite actions in this repo, one per stage (`implement/assess`, `implement/report`, `implement/fix`), versioned with the other actions and used like `triage/`. Each repository has a thin wrapper workflow that declares the three jobs, their `permissions:` and the `AGENT_AUTO` rule, and calls one action per job. Not a reusable workflow: the permissions would then sit in this repository, out of sight of the repository that is handing them out. Not just files the wrapper checks out: the validation and the label map must be one tested copy. |
+| Where it lives | Three composite actions in this repo, one per stage (`implement/assess`, `implement/report`, `implement/fix`), versioned with the other actions and used like `triage/`. The jobs, their `permissions:` and the `AGENT_AUTO` rule live in one reusable workflow in this repository (see "A reusable workflow"), which each repository calls from a short workflow of its own. The first version copied the jobs into every repository, on the argument that a reusable workflow would put the permissions out of sight of the repository handing them out; seven releases in a few days showed the price of that (every new job was a hand edit in every repository), and the caller still states the permissions it grants, in its own file. Not just files the wrapper checks out: the validation and the label map must be one tested copy. |
 
 ## Flow
 
@@ -213,6 +213,69 @@ The fix action now has a `draft` input, `'false'` by default, so the pull reques
 ready for review. Set `draft: 'true'` on the step to get the old behaviour. The input is
 checked to be exactly `true` or `false` before anything is pushed. The notice in the pull
 request text no longer says "as a draft", because whether it is one is the workflow's choice.
+
+## A reusable workflow
+
+A repository's workflow is now short: the trigger, one job that calls
+`.github/workflows/implement.yml` in this repository, the permissions that job grants, and
+the settings that are the repository's own (the commands the model may run, the notes, whether
+to install Nix). The shared workflow holds every job, the guard that decides who may start a
+run, each job's `permissions:`, the outputs and the order. A new job, or a change to a guard,
+reaches a repository by changing the version in one `uses:` line.
+
+- **What the caller grants.** A called job can only narrow what its caller grants, so the
+  calling job states the union of what the jobs ask for (`contents: write`, `issues: write`,
+  `pull-requests: write`), and each job inside narrows it again, so the model steps still run
+  with the least that works. A test checks the caller grants exactly that union, no more.
+  Nothing asks for `workflows`.
+- **What the caller passes.** Inputs, never code: the commands and the notes go to the
+  actions' `with:` and never into a shell script (a test checks no `${{ }}` appears in any
+  `run:`). The repository variables `AGENT_AUTO` and `AGENT_DAILY_CAP` are passed as plain
+  inputs, so the guard does not depend on how `vars` behaves in a called workflow. Secrets are
+  passed by name: the Claude token, and an optional OpenRouter key for the review's fallback.
+  Never `secrets: inherit`.
+- **What stays in the caller.** The trigger, because a called workflow runs for the event of
+  its caller; and `concurrency`, so one run per issue is queued and never cancelled halfway.
+
+### How the nested actions are pinned
+
+A repository pins the `uses:` line of the shared workflow to a full commit, as before. Inside
+that file the actions are another matter: a file cannot name its own commit, and `./` would
+point at the caller's repository. So they are named by the tag of the release the file ships
+in (`@v1.8.0`). That is only as fixed as the tag, so **releases must be immutable** (GitHub's
+"immutable releases" setting): once a release is published its tag cannot be moved or deleted,
+which makes it as fixed as a commit. Without the setting the pin is weaker than it looks, and
+a push that moved a version tag would run in every repository that pinned the file.
+
+`scripts/pin_implement_actions.py X.Y.Z` is the one place that changes those names, and tests
+check that every call names the same plain `vX.Y.Z`. A change that adds an input to an action
+and the workflow input that uses it has to be released with the names already moved to its own
+version, because the old tag does not know the input.
+
+### Releasing
+
+1. Merge the changes. If the actions or the shared workflow changed, open one more pull
+   request: run `python scripts/pin_implement_actions.py X.Y.Z`, so the file names the release
+   it is about to be, and merge it. (A release with no change to either does not need this.)
+2. Make sure releases are immutable: `gh api -X PUT repos/<owner>/<repo>/immutable-releases`
+   (once; an owner setting).
+3. Tag the merge commit `vX.Y.Z`, move `v1`, and publish the release. Publishing is what locks
+   the tag, so do it last, and check `git ls-remote` shows the commit you meant first: it
+   cannot be undone.
+4. Repositories that call the workflow get a Dependabot pull request for the new version.
+
+### Keeping repositories current
+
+The calling line is a `uses:` of a workflow in this repository, which Dependabot's
+`github-actions` ecosystem is expected to update like any action: it reads the version from the comment next
+to the commit and opens one pull request that changes one line. The repository's own
+`dependabot.yml` covers `directory: "/"`, which is enough. In this repository the nested
+action directories are listed too, for the third-party actions they use (the Claude action),
+and its own calls are ignored, because the pin script owns them.
+
+**[TBD]** confirm, when the first release is out, that Dependabot opens the pull request for
+a commit-pinned reusable workflow in a repository that calls it; if it does not, the
+repository's version bump is a one-line edit.
 
 ## After the pull request is open
 

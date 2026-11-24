@@ -13,7 +13,21 @@ updates:
           - "*"
 
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # The composite actions' own files, which pin the third-party actions they use (the
+    # Claude action). Every directory holding an action.yml is listed; a test checks that.
+    directories:
+      - "/"
+      - "/triage"
+      - "/implement/assess"
+      - "/implement/report"
+      - "/implement/fix"
+      - "/implement/notify"
+      - "/implement/finish"
+    # The shared workflow names this repository's own actions by the release it ships in, and
+    # scripts/pin_implement_actions.py changes them; Dependabot must not propose its own.
+    ignore:
+      - dependency-name: "menil/pr-code-review-action"
+      - dependency-name: "menil/pr-code-review-action/*"
     schedule:
       interval: "weekly"
     commit-message:
