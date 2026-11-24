@@ -403,6 +403,86 @@ def test_a_branch_that_already_exists_is_not_overwritten(box: Sandbox) -> None:
     )
 
 
+def test_a_good_description_names_the_branch_after_the_change(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(".agent-change.md", CHANGE)
+    done = box.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    branch = "agent/issue-17-return-passwordprotected-for-encrypted"
+    assert box.remote_branches() == [branch, "main"]
+    assert f"--head {branch} " in box.gh_log.read_text()
+    assert box._git(box.work, "branch", "--show-current").strip() == branch
+
+
+@pytest.mark.parametrize(
+    "existing", ["agent/issue-17", "agent/issue-17-an-earlier-try"]
+)
+def test_an_earlier_branch_for_the_issue_blocks_a_new_one_whatever_its_name(
+    box: Sandbox, existing: str
+) -> None:
+    """The name now depends on the model's words, so a retry may pick another one; the
+    check must still see the first attempt, or the issue gets two pull requests."""
+    box._git(box.work, "push", "-q", "origin", f"main:{existing}")
+    box.write("slug.py", "x = 2\n")
+    box.write(".agent-change.md", CHANGE)
+    done = box.run()
+    assert done.returncode != 0
+    assert "already exists" in done.stdout
+    assert box.gh_calls() == []
+    assert sorted(box.remote_branches()) == sorted([existing, "main"])
+
+
+@pytest.mark.parametrize(
+    "other", ["agent/issue-170", "agent/issue-170-x", "agent/issue-1"]
+)
+def test_another_issues_branch_does_not_block_this_one(
+    box: Sandbox, other: str
+) -> None:
+    box._git(box.work, "push", "-q", "origin", f"main:{other}")
+    box.write("slug.py", "x = 2\n")
+    done = box.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "agent/issue-17" in box.remote_branches()
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "",
+        "main",
+        "agent/issue-18",
+        "agent/issue-17x",
+        "agent/issue-17-",
+        "agent/issue-17-A",
+        "agent/issue-17-a b",
+        "agent/issue-17-a..b",
+        "agent/issue-17-$(touch x)",
+        "agent/issue-17--x",
+        "../agent/issue-17",
+    ],
+)
+def test_a_branch_name_that_is_not_this_issues_is_refused(
+    box: Sandbox, branch: str
+) -> None:
+    """Whatever writes the name, the script checks it again before it names a branch."""
+    shim = box.bin / "python"
+    shim.unlink()
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = describe ]; then\n'
+        f'  {sys.executable} "$@"\n'
+        f'  printf %s "{branch}" > "$3/branch.txt"\n'
+        "else\n"
+        f'  exec {sys.executable} "$@"\n'
+        "fi\n"
+    )
+    shim.chmod(0o755)
+    box.write("slug.py", "x = 2\n")
+    done = box.run()
+    assert done.returncode != 0, done.stdout
+    assert box.remote_branches() == ["main"] and box.gh_calls() == []
+
+
 def test_a_remote_that_cannot_be_reached_is_not_mistaken_for_no_branch(
     box: Sandbox,
 ) -> None:

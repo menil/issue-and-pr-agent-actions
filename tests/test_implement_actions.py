@@ -224,7 +224,9 @@ def test_only_the_agents_own_branch_is_pushed_and_never_by_force() -> None:
     assert len(pushes) == 1
     assert '"$branch"' in pushes[0]
     assert "--force" not in script and " -f " not in pushes[0] and "+" not in pushes[0]
-    assert 'branch="agent/issue-${NUMBER}"' in script
+    assert 'branch="$(cat "$texts/branch.txt")"' in script
+    # The name is checked again before it is used, and must be this issue's.
+    assert 'agent/issue-${NUMBER}-"*' in script and "[a-z0-9]+" in script
 
 
 def test_the_pull_request_is_ready_for_review_unless_a_draft_is_asked_for() -> None:

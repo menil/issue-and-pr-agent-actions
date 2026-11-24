@@ -449,6 +449,30 @@ def pull_request_body(change: Change, number: int) -> str:
     return "\n\n".join(parts)
 
 
+MAX_BRANCH_SLUG_CHARS = 40
+
+
+def branch_slug(title: str) -> str:
+    """Lowercase words joined by hyphens, cut at a word, for the end of a branch name.
+
+    Only [a-z0-9] and single hyphens can come out, so the result is safe in a ref name and
+    in a shell word whatever the title held; a title with no such characters gives ''."""
+    words = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if len(words) <= MAX_BRANCH_SLUG_CHARS:
+        return words
+    cut = words[:MAX_BRANCH_SLUG_CHARS]
+    if words[MAX_BRANCH_SLUG_CHARS] != "-" and "-" in cut:
+        cut = cut.rsplit("-", 1)[0]
+    return cut.strip("-")
+
+
+def branch_name(number: int, change: Change | None) -> str:
+    """`agent/issue-N`, then the words of the change's title when there are any. The start
+    never changes: repositories skip, and look for, branches that begin with it."""
+    slug = branch_slug(change.title) if change else ""
+    return f"agent/issue-{number}" + (f"-{slug}" if slug else "")
+
+
 def generic_change_texts(number: int) -> tuple[str, str, str]:
     """The title, commit message and body used when the model's file cannot be used."""
     title = f"fix: address issue #{number}"
@@ -895,7 +919,8 @@ def run_notify(kind: str) -> None:
             "A run for this issue failed before it finished, so no pull request was "
             f"opened by it. Nothing was merged, approved or closed.{log}\n\n"
             "To try again, a maintainer removes any `repro:` labels, deletes the "
-            f"assessment comment and the `agent/issue-{number}` branch if they exist, "
+            f"assessment comment and any `agent/issue-{number}` or "
+            f"`agent/issue-{number}-*` branch, "
             f"and applies `ready-to-implement` again.\n\n{FAILED_MARKER}"
         )
     triage.github_request(
@@ -922,6 +947,7 @@ def run_describe(out_dir: str, number: str) -> None:
     if not re.fullmatch(r"[0-9]+", number):
         _fail("Not an issue number.")
     issue = int(number)
+    change: Change | None = None
     try:
         with open(CHANGE_FILE, encoding="utf-8", errors="replace") as f:
             raw = f.read(MAX_CHANGE_FILE_CHARS)
@@ -945,6 +971,7 @@ def run_describe(out_dir: str, number: str) -> None:
     (out / "title.txt").write_text(title, encoding="utf-8")
     (out / "commit.txt").write_text(message, encoding="utf-8")
     (out / "body.md").write_text(body, encoding="utf-8")
+    (out / "branch.txt").write_text(branch_name(issue, change), encoding="utf-8")
 
 
 def run_check_changes() -> None:

@@ -6,6 +6,9 @@ which type, branch or closing keyword is used beyond the allowed ones, nothing i
 ping a person or plant a link, and any fault in the file falls back to the generic text
 instead of failing the run."""
 
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import implement
@@ -13,6 +16,8 @@ import pytest
 from implement import (
     CHANGE_TYPES,
     Change,
+    branch_name,
+    branch_slug,
     commit_message,
     generic_change_texts,
     parse_change,
@@ -423,3 +428,95 @@ def test_describe_leaves_a_huge_file_alone(
     code, out = _describe(tmp_path)
     assert code == 0
     assert len((out / "body.md").read_text()) < implement.MAX_CHANGE_BODY_CHARS * 6
+
+
+# --- the branch name ---
+
+
+@pytest.mark.parametrize(
+    ("title", "slug"),
+    [
+        ("report encrypted PDFs", "report-encrypted-pdfs"),
+        ("Handle C++ & Rust!!", "handle-c-rust"),
+        ("  spaced   out  ", "spaced-out"),
+        ("open_error maps pdf2 files", "open-error-maps-pdf2-files"),
+        ("", ""),
+        ("***", ""),
+        ("日本語のタイトル", ""),
+    ],
+)
+def test_the_slug_is_lowercase_words_joined_by_hyphens(title: str, slug: str) -> None:
+    assert branch_slug(title) == slug
+
+
+def test_a_long_title_is_cut_at_a_word_under_the_limit() -> None:
+    slug = branch_slug(
+        "return PasswordProtected for encrypted PDFs when loading both files"
+    )
+    assert slug == "return-passwordprotected-for-encrypted"
+    assert len(slug) <= implement.MAX_BRANCH_SLUG_CHARS
+
+
+def test_one_very_long_word_is_cut_hard() -> None:
+    assert branch_slug("x" * 200) == "x" * implement.MAX_BRANCH_SLUG_CHARS
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "../../etc/passwd",
+        "a..b",
+        "--help",
+        "-rf",
+        "refs/heads/main",
+        "a b\nc",
+        "x@{1}",
+        "end.lock",
+        "a~1^2:?*[",
+        "\\ back",
+        "tab\there",
+        "." * 50,
+        "-" * 50,
+    ],
+)
+def test_a_slug_is_always_safe_in_a_branch_name(title: str) -> None:
+    slug = branch_slug(title)
+    # Words joined by single hyphens, or nothing at all when the title had no usable letters.
+    assert re.fullmatch(r"([a-z0-9]+(-[a-z0-9]+)*)?", slug), slug
+    assert len(slug) <= implement.MAX_BRANCH_SLUG_CHARS
+    # The slug takes the title as it is, whatever the header parser would have done to it.
+    name = branch_name(17, _change(title=title)) if slug else ""
+    if name:
+        assert name.startswith("agent/issue-17-")
+        if shutil.which("git"):
+            subprocess.run(["git", "check-ref-format", "--branch", name], check=True)
+
+
+def test_the_branch_name_keeps_the_agent_issue_start() -> None:
+    assert branch_name(63, None) == "agent/issue-63"
+    assert (
+        branch_name(63, _change())
+        == "agent/issue-63-return-passwordprotected-for-encrypted"
+    )
+    # A title with no usable letters leaves the plain name.
+    assert branch_name(63, _change(title="日本語")) == "agent/issue-63"
+
+
+def test_describe_writes_the_branch_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".agent-change.md").write_text(GOOD, encoding="utf-8")
+    code, out = _describe(tmp_path)
+    assert code == 0
+    assert (out / "branch.txt").read_text() == (
+        "agent/issue-17-return-passwordprotected-for-encrypted"
+    )
+
+
+def test_describe_writes_the_plain_branch_when_it_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    code, out = _describe(tmp_path)
+    assert code == 0 and (out / "branch.txt").read_text() == "agent/issue-17"
