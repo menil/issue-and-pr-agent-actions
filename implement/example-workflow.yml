@@ -107,6 +107,8 @@ jobs:
       contents: write
       pull-requests: write
       issues: read
+    outputs:
+      pull_request: ${{ steps.fix.outputs.pull_request_url }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -114,6 +116,7 @@ jobs:
           persist-credentials: false
 
       - name: Fix the issue and open a draft pull request
+        id: fix
         # EDIT: the same release tag as above.
         uses: menil/pr-code-review-action/implement/fix@v1
         with:
@@ -124,6 +127,43 @@ jobs:
           command_tools: 'Bash(cargo test:*),Bash(cargo build:*)'
           repository_notes: |
             Run the tests with `cargo test`.
+
+  # Reviews the draft pull request the fix opened. A pull request opened with the workflow's
+  # own token does not start your repository's review workflow until a person clicks
+  # "Approve and run", so the review is run from here, on the number of that pull request.
+  # It reads the diff only: nothing from the pull request is checked out or run. A failed
+  # review does not fail this run. If your review workflow also triggers on pull requests,
+  # have it skip branches named agent/issue-*, or the click will produce a second review.
+  review:
+    needs: fix
+    if: needs.fix.outputs.pull_request != ''
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Find the pull request number
+        id: pr
+        env:
+          URL: ${{ needs.fix.outputs.pull_request }}
+        run: |
+          set -euo pipefail
+          # Only the exact form of a pull request URL; anything else stops here.
+          if [[ "$URL" =~ ^https://github\.com/[^/]+/[^/]+/pull/([0-9]+)$ ]]; then
+            echo "number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::The fix did not report a pull request URL."
+            exit 1
+          fi
+
+      - name: Review the pull request
+        # EDIT: the same release tag as above.
+        uses: menil/pr-code-review-action@v1
+        with:
+          pull_request_number: ${{ steps.pr.outputs.number }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   # One comment, once per issue, if any stage above failed, so a failure is not silent.
   notify:

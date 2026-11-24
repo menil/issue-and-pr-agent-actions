@@ -134,6 +134,7 @@ jobs:
 | `github_token` | GitHub token for posting reviews | No | `${{ github.token }}` |
 | `post_summary` | Whether to post the high-level summary (PR-level overview of the review findings) as the review body | No | `true` |
 | `exclude_patterns` | Custom regex patterns to exclude from review, separated by commas and/or newlines | No | `''` |
+| `pull_request_number` | The pull request to review, for a workflow that did not start from that pull request (the implementation workflow uses it). Empty means the pull request that triggered the workflow | No | `''` |
 
 ## Issue triage
 
@@ -229,7 +230,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 ### What to expect
 
-- **One click per pull request.** A pull request opened with the workflow's own token does not run `validate` or the review on its own: GitHub creates those runs and holds them until a person clicks "Approve and run". That is the price of not putting a personal access token in a secret.
+- **One click per pull request, for `validate`.** A pull request opened with the workflow's own token does not start your repository's workflows on its own: GitHub creates the runs and holds them until a person clicks "Approve and run". That is the price of not putting a personal access token in a secret. The **review** does not wait for the click: the example workflow's `review` job runs it on the new pull request straight away, reading only its diff. A failed review does not fail the run. Because the click would also start your own `pr-review.yml`, make that one skip these branches, or the pull request gets two reviews: add `&& !(startsWith(github.head_ref, 'agent/issue-') && github.event.pull_request.head.repo.full_name == github.repository)` to its job's `if:`. The repository check keeps a fork from skipping its own review by naming a branch like that.
 - **The model is a risk even so.** It reads text an outsider may have written, with your Claude token in the job's environment and a test command it can edit and run. Write the allowed commands narrowly, keep `AGENT_AUTO` off in a repository with strangers' issues, and read the design document's section on what could still go wrong.
 - **A failed run says so, once.** If any stage fails, the issue gets one comment with a link to the log, and no pull request. It is not repeated for the same issue.
 - **It uses your subscription,** not an API key. One small issue took about 15 seconds of model time across the two stages in a trial; heavy use is unmeasured.

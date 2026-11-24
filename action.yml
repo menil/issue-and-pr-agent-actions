@@ -55,6 +55,10 @@ inputs:
     description: 'Comma or newline separated custom regex patterns to exclude from review'
     required: false
     default: ''
+  pull_request_number:
+    description: 'The pull request to review, for a workflow that did not start from that pull request (for example the one that opened it). Empty means the pull request that triggered the workflow.'
+    required: false
+    default: ''
 
 
 runs:
@@ -69,9 +73,10 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ inputs.pull_request_number || github.event.pull_request.number }}
         REPOSITORY: ${{ github.repository }}
       run: |
+        [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::Not a pull request number."; exit 1; }
         gh pr diff "$PR_NUMBER" --repo "$REPOSITORY" > pr.diff
 
     - name: Run Review Script
@@ -87,7 +92,7 @@ runs:
         ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
         ANTHROPIC_MAX_TOKENS: ${{ inputs.anthropic_max_tokens }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ inputs.pull_request_number || github.event.pull_request.number }}
         REPO: ${{ github.repository }}
         GH_TOKEN: ${{ inputs.github_token }}
         POST_SUMMARY: ${{ inputs.post_summary }}
