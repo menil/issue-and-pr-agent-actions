@@ -1,0 +1,105 @@
+name: 'AI Issue Implementation: assess'
+description: 'Reads an issue by a trusted author and, with a read-only model run, returns a verdict on whether it is valid and reproduces. First stage of the implementation action (docs/implement-action.md).'
+author: 'meni'
+branding:
+  icon: 'search'
+  color: 'blue'
+
+# The calling job must check the repository out first, and should give this action
+# nothing beyond contents: read and issues: read.
+inputs:
+  claude_code_oauth_token:
+    description: 'Claude Code OAuth token. It reaches only the model step.'
+    required: true
+  github_token:
+    description: 'GITHUB_TOKEN to read the issue (contents: read, issues: read are enough)'
+    required: false
+    default: '${{ github.token }}'
+  issue_number:
+    description: 'Number of the issue to assess'
+    required: true
+  actor_login:
+    description: 'Who applied the ready-to-implement label, when that is what started the run. If the issue author is not an owner, member or collaborator, this person must have write access.'
+    required: false
+    default: ''
+  repository_notes:
+    description: "The repository's own notes for the model: which command runs the program or its tests, and anything a newcomer should know. Appended to the prompt."
+    required: false
+    default: ''
+  command_tools:
+    description: 'The commands the model may run, as Claude Code tool patterns, comma-separated, for example Bash(cargo test:*). Read, Grep and Glob are always allowed; nothing else is.'
+    required: true
+  max_turns:
+    description: 'Most back-and-forth exchanges the model may take'
+    required: false
+    default: '12'
+
+outputs:
+  verdict:
+    description: "The model's verdict as a JSON string, to be validated by the report stage; never trust it before that."
+    value: ${{ steps.model.outputs.structured_output }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+
+    - name: Check the inputs that end up inside quotes
+      shell: bash
+      env:
+        MAX_TURNS: ${{ inputs.max_turns }}
+        COMMAND_TOOLS: ${{ inputs.command_tools }}
+      run: |
+        set -euo pipefail
+        [[ "$MAX_TURNS" =~ ^[0-9]+$ ]] || { echo "::error::max_turns must be a number."; exit 1; }
+        case "$COMMAND_TOOLS" in
+          '') echo "::error::command_tools must name at least one command."; exit 1 ;;
+          *'"'*|*$'\n'*) echo "::error::command_tools must not contain a double quote or a newline."; exit 1 ;;
+        esac
+
+    - name: Read the issue, only if a trusted person stands behind it
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        ACTOR_LOGIN: ${{ inputs.actor_login }}
+      run: python ${{ github.action_path }}/../../src/implement.py fetch
+
+    - name: Build the verdict schema
+      id: contract
+      shell: bash
+      run: python ${{ github.action_path }}/../../src/implement.py schema
+
+    - name: Build the prompt
+      id: prompt
+      shell: bash
+      env:
+        REPO_NOTES: ${{ inputs.repository_notes }}
+      run: python ${{ github.action_path }}/../../src/implement.py prompt assess
+
+    - name: Assess the issue
+      id: model
+      uses: anthropics/claude-code-action@8d70a0dd265122bd65b8e09d3d959e65373ae2a1 # v1.0.260
+      with:
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ inputs.github_token }}
+        prompt: ${{ steps.prompt.outputs.prompt }}
+        claude_args: |
+          --max-turns ${{ inputs.max_turns }}
+          --permission-mode acceptEdits
+          --allowedTools "Read,Grep,Glob,${{ inputs.command_tools }}"
+          --disallowedTools "WebFetch,WebSearch,Bash(git:*)"
+          --json-schema '${{ steps.contract.outputs.schema }}'
+
+    - name: Report how long the run took
+      if: always()
+      shell: bash
+      env:
+        EXECUTION_FILE: ${{ steps.model.outputs.execution_file }}
+      run: |
+        # Numbers only, never what the model said: it is steered by the issue.
+        jq -sc '[.[] | if type=="array" then .[] else . end] | map(select(.type? == "result")) | last | {subtype, is_error, num_turns, duration_ms, total_cost_usd}' "$EXECUTION_FILE" \
+          || echo "Could not read the execution file."

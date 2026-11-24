@@ -181,10 +181,23 @@ src/implement.py             the shared code: issue fetch and author check, verd
 docs/implement-action.md     this document
 ```
 
-`src/implement.py` reuses `src/sanitize.py` and the label-write helpers of
-`src/triage.py`. The instruction files are plain markdown so a different harness can
-replace the model step later without losing them. Each action declares only the inputs
-it uses, and `tests/test_action_yml.py` is extended to check all three.
+`src/implement.py` has five commands, one per job of work: `fetch` (the author check and
+the issue file), `schema` (the verdict contract, as the JSON schema the model is held to),
+`prompt` (an instruction file plus the repository's notes), `report` (verdict validation,
+labels, comment, gate) and `check-changes` (what may be committed). It reuses
+`src/sanitize.py` and the label-writing helpers of `src/triage.py`. The instruction files
+are plain markdown so a different harness can replace the model step later without
+losing them. Each action declares only the inputs it uses, and
+`tests/test_action_yml.py` checks all of them.
+
+What the shell in `fix/action.yml` does is run, not just read, by the tests: a real git
+repository, a local bare remote and a stub `gh`. The script refuses, before anything is
+committed or pushed: a change under `.github/`, `.git/`, `.githooks/` or the agent
+directories; a lockfile, `CODEOWNERS`, `.gitmodules` or `.gitattributes`; a path with a
+control character or a parent-directory component; more than 25 files; no change at all;
+and a branch that already exists. Renames are checked as a delete and an add. The model
+action is pinned to a commit (a release at least two weeks old when chosen), because that
+step holds the Claude token.
 
 ## Verification
 

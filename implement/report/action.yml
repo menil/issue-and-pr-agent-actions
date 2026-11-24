@@ -1,0 +1,41 @@
+name: 'AI Issue Implementation: report'
+description: 'Validates the verdict of the assess stage, writes the labels and the one comment, and says whether a fix may be attempted. No model runs here. Second stage of the implementation action (docs/implement-action.md).'
+author: 'meni'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+# Needs no checkout. Give the job issues: write and nothing else.
+inputs:
+  github_token:
+    description: 'GITHUB_TOKEN to write the labels and the comment (issues: write)'
+    required: false
+    default: '${{ github.token }}'
+  issue_number:
+    description: 'Number of the issue that was assessed'
+    required: true
+  verdict:
+    description: "The verdict output of the assess stage. It is validated here; an empty or malformed one means no fix."
+    required: true
+
+outputs:
+  proceed:
+    description: "'true' only if the verdict passed the gate and was written; otherwise 'false'."
+    value: ${{ steps.report.outputs.proceed }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+
+    - name: Write the assessment
+      id: report
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        VERDICT: ${{ inputs.verdict }}
+      run: python ${{ github.action_path }}/../../src/implement.py report
