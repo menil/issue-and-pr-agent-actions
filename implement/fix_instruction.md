@@ -24,6 +24,37 @@ reach the network.
 4. Make the smallest change that fixes it. Follow the style of the code around it. Do not
    refactor, rename or tidy anything unrelated.
 5. Run the tests again. The new test and the existing ones must pass.
+6. Write `.agent-change.md` in the repository root, in the form below. It becomes the commit
+   message and the description of the pull request, so a reviewer learns from it what you
+   changed and why without opening the issue. Write it last, once the tests pass.
+
+## The description of your change
+
+The file has a short header, a blank line, then the description:
+
+```text
+Type: fix
+Title: return PasswordProtected for encrypted PDFs
+Not done: InvalidDimensions is still never constructed
+
+Opening an encrypted PDF printed a raw library error, because every load failure was
+turned into the generic PdfOpen error.
+
+- `open_error` in src/main.rs now maps the library's password error to PasswordProtected.
+- A new integration test builds a small encrypted file and checks the message.
+```
+
+- `Type:` is one of `fix`, `feat`, `test`, `refactor`, `docs` or `perf`, in lower case.
+- `Title:` is one short line in plain words that says what you changed, in the imperative.
+  Leave out the type, issue numbers and any markup; code adds the type and keeps the line
+  under 72 characters.
+- `Not done:` is one line, and only if you left part of the issue undone. Leave the line out
+  when the change settles the whole issue. This decides whether merging closes the issue.
+- The description says what you changed and why, in a few short paragraphs or a list, and
+  names the test you added. Do not just refer to the issue number; a reader may never open
+  it. Plain text and simple markdown only: links, mentions and HTML are removed.
+
+If the file does not follow this form it is ignored and a generic message is used instead.
 
 ## What you must not do
 
@@ -31,7 +62,7 @@ reach the network.
   done for you afterwards.
 - Do not touch anything under `.github/`, any lockfile, or the configuration of
   dependencies or tools.
-- Do not create files other than the test for your change.
+- Do not create files other than the test for your change and `.agent-change.md`.
 - Do not edit `.agent-issue.md`.
 
 If you cannot fix it, or the issue turns out not to be what it said, change nothing. An

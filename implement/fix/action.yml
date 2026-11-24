@@ -120,6 +120,11 @@ runs:
         { git diff --name-only --no-renames -z HEAD; git ls-files --others --exclude-standard -z; } \
           | python "$IMPLEMENT" check-changes
 
+        # The model's own words for the commit and the pull request, read under a fixed
+        # contract and made safe; the generic text if its file is missing or wrong.
+        texts="$(mktemp -d)"
+        python "$IMPLEMENT" describe "$texts" "$NUMBER"
+
         branch="agent/issue-${NUMBER}"
         remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 
@@ -136,14 +141,11 @@ runs:
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git checkout -b "$branch"
         git add -A
-        git commit -q -m "fix: address issue #${NUMBER}"
+        git commit -q -F "$texts/commit.txt"
         git push "$remote" "$branch"
         failure="$(mktemp)"
         if ! url=$(gh pr create --draft --base "$BASE_BRANCH" --head "$branch" \
-          --title "fix: address issue #${NUMBER}" \
-          --body "Opened automatically from #${NUMBER}, as a draft. A model wrote this change; nothing here has been reviewed, merged or approved by it. Read the change and its regression test before anything else.
-
-        Closes #${NUMBER}" 2> "$failure"); then
+          --title "$(cat "$texts/title.txt")" --body-file "$texts/body.md" 2> "$failure"); then
           sed 's/^/gh: /' "$failure"
           echo "::error::The branch $branch was pushed but the pull request could not be opened. If GitHub says Actions may not create pull requests, turn on 'Allow GitHub Actions to create and approve pull requests' under Settings, Actions, General. Then delete the branch and run again."
           exit 1

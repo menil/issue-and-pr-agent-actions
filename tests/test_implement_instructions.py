@@ -94,6 +94,29 @@ def test_the_fix_shows_the_problem_before_it_changes_anything() -> None:
     assert flat.index("make the smallest change") < flat.index("run the tests again")
 
 
+def test_the_fix_asks_for_a_description_in_the_form_the_code_reads() -> None:
+    flat = _words(FIX)
+    assert "`.agent-change.md`" in FIX
+    for key in ("type:", "title:", "not done:"):
+        assert key in flat
+    for kind in implement.CHANGE_TYPES:
+        assert f"`{kind}`" in FIX
+    assert "a blank line" in flat
+
+
+def test_the_fix_says_the_description_is_about_the_change_not_the_issue() -> None:
+    flat = _words(FIX)
+    assert "what you changed and why" in flat
+    assert "do not just refer to the issue number" in flat
+    assert "if you left part of the issue undone" in flat
+
+
+def test_the_example_description_in_the_fix_is_one_the_code_accepts() -> None:
+    block = FIX.split("```")[1].removeprefix("text\n")
+    change = implement.parse_change(block)
+    assert change.kind in implement.CHANGE_TYPES and change.title and change.body
+
+
 def test_the_assessment_does_not_judge_what_is_worth_doing() -> None:
     assert "do not judge whether it is worth doing" in _words(ASSESS)
 
@@ -109,7 +132,7 @@ def test_the_assessment_cannot_write_anything() -> None:
         "do not run `git`",
         "anything under `.github/`",
         "any lockfile",
-        "do not create files other than the test",
+        "do not create files other than the test for your change and `.agent-change.md`",
         "do not edit `.agent-issue.md`",
         "write a test that shows the problem",
         "it must fail, and for the reason the issue gives",

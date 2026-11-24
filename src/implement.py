@@ -28,6 +28,7 @@ import os
 import posixpath
 import re
 import sys
+import textwrap
 import urllib.error
 import urllib.parse
 import uuid
@@ -99,7 +100,13 @@ PROTECTED_TOP_DIRS = frozenset(
     {".github", ".git", ".githooks", ".claude", ".codex", ".agents"}
 )
 PROTECTED_NAMES = frozenset(
-    {".gitmodules", ".gitattributes", ".agent-issue.md", "codeowners"}
+    {
+        ".gitmodules",
+        ".gitattributes",
+        ".agent-issue.md",
+        ".agent-change.md",
+        "codeowners",
+    }
 )
 LOCKFILES = frozenset(
     {
@@ -160,6 +167,7 @@ FAILED_MARKER = "<!-- agent-implement:failed -->"
 NOTICES = ("capped", "failed")
 
 ISSUE_FILE = Path(".agent-issue.md")
+CHANGE_FILE = Path(".agent-change.md")
 EXCLUDE_FILE = Path(".git/info/exclude")
 REPO_PATTERN = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 LOGIN_PATTERN = re.compile(r"[A-Za-z0-9-]+(\[bot\])?")
@@ -259,16 +267,193 @@ def issue_markdown(issue: TrustedIssue) -> str:
     return f"# {title}\n\n{body}"
 
 
+def keep_out_of_commits(name: str, exclude: Path = EXCLUDE_FILE) -> None:
+    """Tell git to ignore a file in this clone, so no later `git add -A` can commit it."""
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if name not in existing.splitlines():
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        exclude.write_text(f"{existing}{separator}{name}\n", encoding="utf-8")
+
+
 def write_issue_file(
     text: str, path: Path = ISSUE_FILE, exclude: Path = EXCLUDE_FILE
 ) -> None:
     """Write the issue file and keep it out of any commit, whatever adds files later."""
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    if path.name not in existing.splitlines():
-        separator = "" if not existing or existing.endswith("\n") else "\n"
-        exclude.write_text(f"{existing}{separator}{path.name}\n", encoding="utf-8")
+    keep_out_of_commits(path.name, exclude)
     path.write_text(text, encoding="utf-8")
+
+
+# --- the commit message and pull request text ---
+
+# The types a change may be given. They are the conventional-commit types a fix stage can
+# honestly mean; anything else, and "chore" in particular, is for a person to choose.
+CHANGE_TYPES = ("fix", "feat", "test", "refactor", "docs", "perf")
+MAX_COMMIT_TITLE_CHARS = 71  # a commit title is kept under 72 characters
+COMMIT_WRAP = 70
+MAX_CHANGE_BODY_CHARS = 3000
+MAX_NOT_DONE_CHARS = 400
+MAX_CHANGE_FILE_CHARS = 20_000
+_HEADER_KEYS = {
+    "type": "kind",
+    "title": "title",
+    "not done": "not_done",
+    "not-done": "not_done",
+}
+_NOTHING_LEFT = frozenset({"", "none", "nothing", "n/a", "na", "-"})
+_TITLE_URL = re.compile(r"\b[a-z][a-z0-9+.-]*://\S*", re.IGNORECASE)
+# What a title may hold: words, spaces and plain punctuation. Anything that renders, links,
+# mentions or escapes is dropped, not escaped, because a title has no room for markup.
+_TITLE_UNSAFE = re.compile(r"[^\w .,'\":;()/+=?!-]")
+_TITLE_PREFIX = re.compile(
+    r"^(?:fix|feat|test|refactor|docs|perf|chore|build|ci|style|revert)"
+    r"(?:\([^)]*\))?!?:\s*",
+    re.IGNORECASE,
+)
+_LIST_ITEM = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$")
+_FENCE_LINE = re.compile(r"^\s{0,3}(?:`{3,}|~{3,})")
+
+
+@dataclass(frozen=True)
+class Change:
+    """What the model said about its change, after every field has been checked."""
+
+    kind: str
+    title: str
+    not_done: str
+    body: str
+
+
+def _clean_title(value: str) -> str:
+    text = _TITLE_URL.sub(" ", strip_invisible_chars(value))
+    text = " ".join(_TITLE_UNSAFE.sub(" ", text).split())
+    text = _TITLE_PREFIX.sub("", text).rstrip(" .")
+    if not text:
+        raise ValueError("the title has nothing left once cleaned")
+    return text
+
+
+def parse_change(raw: str) -> Change:
+    """Read the model's `.agent-change.md`. Anything outside the contract rejects all of it.
+
+    A short header of `Type:`, `Title:` and an optional `Not done:` line, a blank line, then
+    the description. The type must be one of CHANGE_TYPES. The title is reduced to plain
+    words; the not-done line and the description are made safe to post, as the assessment
+    comment is. The messages here are fixed text, so they can be logged without repeating
+    anything the model wrote."""
+    text = strip_invisible_chars(raw).replace("\r\n", "\n").strip()
+    parts = re.split(r"\n[ \t]*\n", text, maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError(
+            "there is no blank line between the header and the description"
+        )
+    header, description = parts
+    fields: dict[str, str] = {}
+    for line in header.split("\n"):
+        key, colon, value = line.partition(":")
+        name = _HEADER_KEYS.get(" ".join(key.lower().split())) if colon else None
+        if name is None:
+            raise ValueError("a header line is not Type, Title or Not done")
+        if name in fields:
+            raise ValueError("a header line is given twice")
+        fields[name] = value.strip()
+    kind = fields.get("kind", "").lower()
+    if kind not in CHANGE_TYPES:
+        raise ValueError("the type is not one of the allowed types")
+    if not fields.get("title"):
+        raise ValueError("there is no title")
+    title = _clean_title(fields["title"])
+
+    not_done = ""
+    said = fields.get("not_done", "")
+    if said.strip(" .").lower() not in _NOTHING_LEFT:
+        safe = sanitize_or_drop(said, MAX_NOT_DONE_CHARS, "the not-done line")
+        if safe is None:
+            raise ValueError("the not-done line could not be made safe")
+        not_done = safe
+
+    body = sanitize_or_drop(
+        description, MAX_CHANGE_BODY_CHARS, "the change description"
+    )
+    if not body:
+        raise ValueError("the description is empty or could not be made safe")
+    return Change(kind, title, not_done, body)
+
+
+def commit_title(change: Change) -> str:
+    """`type: subject`, cut at a word so the whole is under 72 characters."""
+    budget = MAX_COMMIT_TITLE_CHARS - len(change.kind) - 2
+    title = change.title
+    if len(title) > budget:
+        cut = title[:budget]
+        if title[budget] != " " and " " in cut:
+            cut = cut.rsplit(" ", 1)[0]
+        title = cut.rstrip(" .,;:-")
+    return f"{change.kind}: {title}"
+
+
+def _closing(change: Change, number: int) -> str:
+    # Code decides this, never the model's prose: a change that says part is left undone
+    # must not close the issue when it is merged.
+    return f"{'Refs' if change.not_done else 'Closes'} #{number}"
+
+
+def _wrap_for_commit(text: str) -> str:
+    """Wrap prose under 72 columns, keeping list items indented and code blocks as written."""
+    out: list[str] = []
+    in_fence = False
+    for line in text.strip("\n").split("\n"):
+        if _FENCE_LINE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+        elif in_fence or not line.strip():
+            out.append(line)
+        else:
+            item = _LIST_ITEM.match(line)
+            marker, rest = (item.group(1), item.group(2)) if item else ("", line)
+            out.append(
+                textwrap.fill(
+                    rest,
+                    width=COMMIT_WRAP,
+                    initial_indent=marker,
+                    subsequent_indent=" " * len(marker),
+                    break_on_hyphens=False,
+                )
+            )
+    return "\n".join(out)
+
+
+def commit_message(change: Change, number: int) -> str:
+    parts = [commit_title(change), _wrap_for_commit(change.body)]
+    if change.not_done:
+        parts.append(_wrap_for_commit(f"Not done: {change.not_done}"))
+    parts.append(_closing(change, number))
+    return "\n\n".join(parts) + "\n"
+
+
+_PULL_REQUEST_NOTICE = (
+    "Opened automatically from #{n}, as a draft. A model wrote this change{and_text}; "
+    "nothing here has been reviewed, merged or approved by it. Read the change and its "
+    "regression test before anything else."
+)
+
+
+def pull_request_body(change: Change, number: int) -> str:
+    parts = [change.body]
+    if change.not_done:
+        parts.append(f"**Not done:** {change.not_done}")
+    parts.append(
+        _PULL_REQUEST_NOTICE.format(n=number, and_text=" and this description")
+    )
+    parts.append(_closing(change, number))
+    return "\n\n".join(parts)
+
+
+def generic_change_texts(number: int) -> tuple[str, str, str]:
+    """The title, commit message and body used when the model's file cannot be used."""
+    title = f"fix: address issue #{number}"
+    body = _PULL_REQUEST_NOTICE.format(n=number, and_text="") + f"\n\nCloses #{number}"
+    return title, f"{title}\n", body
 
 
 # --- the verdict ---
@@ -602,6 +787,8 @@ def run_fetch() -> None:
     except NotTrusted as reason:
         _fail(f"Not starting a run for #{number}: {reason}.")
     write_issue_file(issue_markdown(issue))
+    # The model writes this one later; it must be ignored before it exists.
+    keep_out_of_commits(CHANGE_FILE.name)
     print(f"Read issue #{issue.number}.")
 
 
@@ -726,6 +913,40 @@ def run_check_tools() -> None:
     print("command_tools: every entry names one narrow command.")
 
 
+def run_describe(out_dir: str, number: str) -> None:
+    """Write the commit title, commit message and pull request body for the fix stage.
+
+    The text is the model's, read under the contract and made safe; if the file is missing
+    or outside the contract the generic text is written instead, because a wording problem
+    must not cost the fix. Nothing the model wrote is printed."""
+    if not re.fullmatch(r"[0-9]+", number):
+        _fail("Not an issue number.")
+    issue = int(number)
+    try:
+        with open(CHANGE_FILE, encoding="utf-8", errors="replace") as f:
+            raw = f.read(MAX_CHANGE_FILE_CHARS)
+        change = parse_change(raw)
+        title, message, body = (
+            commit_title(change),
+            commit_message(change, issue),
+            pull_request_body(change, issue),
+        )
+        print("Using the change description the model wrote.")
+    except FileNotFoundError:
+        print("No change description was written; using the generic text.")
+        title, message, body = generic_change_texts(issue)
+    except ValueError as reason:
+        print(
+            f"The change description was not usable ({reason}); using the generic text."
+        )
+        title, message, body = generic_change_texts(issue)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "title.txt").write_text(title, encoding="utf-8")
+    (out / "commit.txt").write_text(message, encoding="utf-8")
+    (out / "body.md").write_text(body, encoding="utf-8")
+
+
 def run_check_changes() -> None:
     raw = sys.stdin.buffer.read()
     paths = [
@@ -760,6 +981,8 @@ def main(argv: list[str]) -> None:
         handler = partial(run_prompt, args[0])
     elif command == "notify" and len(args) == 1 and args[0] in NOTICES:
         handler = partial(run_notify, args[0])
+    elif command == "describe" and len(args) == 2:
+        handler = partial(run_describe, args[0], args[1])
     elif command in COMMANDS and not args:
         handler = COMMANDS[command]
     else:
@@ -768,6 +991,7 @@ def main(argv: list[str]) -> None:
                 *COMMANDS,
                 "prompt {" + "|".join(STAGES) + "}",
                 "notify {" + "|".join(NOTICES) + "}",
+                "describe DIR NUMBER",
             ]
         )
         print(f"usage: implement.py {{{names}}}", file=sys.stderr)

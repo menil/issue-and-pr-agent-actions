@@ -176,6 +176,11 @@ def test_characters_a_reader_cannot_see_are_removed() -> None:
     assert not any(ch in text for ch in hidden)
 
 
+def test_the_description_file_is_a_protected_name_wherever_it_is() -> None:
+    for path in (".agent-change.md", "docs/.agent-change.md", ".AGENT-CHANGE.md"):
+        assert implement.check_changes([path]), path
+
+
 def test_the_issue_file_is_excluded_from_commits(tmp_path: Path) -> None:
     target = tmp_path / ".agent-issue.md"
     exclude = tmp_path / ".git" / "info" / "exclude"
@@ -581,6 +586,19 @@ def test_fetch_writes_the_issue_for_a_trusted_author(
     assert code == 0
     assert "It prints -hello-world-." in (tmp_path / ".agent-issue.md").read_text()
     assert api.writes == []
+
+
+def test_fetch_keeps_both_agent_files_out_of_any_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The description file does not exist yet when the model starts; it is the model that
+    writes it, so it has to be ignored before then."""
+    api = FakeGitHub(issue=_raw())
+    code, _ = _run("fetch", api, tmp_path, monkeypatch)
+    assert code == 0
+    ignored = (tmp_path / ".git" / "info" / "exclude").read_text().splitlines()
+    assert ".agent-issue.md" in ignored and ".agent-change.md" in ignored
+    assert not (tmp_path / ".agent-change.md").exists()
 
 
 def test_fetch_refuses_an_untrusted_author_and_writes_nothing(
