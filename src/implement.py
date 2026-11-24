@@ -14,6 +14,9 @@ Commands, run by the composite actions under implement/:
                  anything that must not be committed.
   check-tools    Refuse a list of allowed commands (COMMAND_TOOLS) that is broad enough
                  to hand the model a shell, the network or the environment.
+  check-cap      Say whether the repository has used up its assessments for the day.
+  notify KIND    Leave the one comment for a run the cap stopped (capped) or a run that
+                 failed (failed), at most once per issue.
 
 The model never decides what is written. It returns a verdict; this code checks every
 field against a fixed contract, picks the labels from a fixed table, and builds the
@@ -30,6 +33,7 @@ import urllib.parse
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any, NoReturn
@@ -134,6 +138,18 @@ DENIED_COMMANDS = frozenset(
 # An interpreter with nothing after it runs anything the model types.
 BARE_INTERPRETER = re.compile(r"python[0-9.]*|node(js)?|ruby|perl|php|deno|bun|lua")
 BASH_PATTERN = re.compile(r"Bash\(([^()]*)\)")
+
+# The cap counts assessments, the comments that say a run reached the model, written by
+# the workflow's own bot: anyone can type the marker into a comment, but not as the bot.
+# It is a soft limit. Runs for different issues start side by side, so a burst can pass
+# the check together before any of them has left a comment.
+DEFAULT_DAILY_CAP = 5
+CAP_WINDOW = timedelta(hours=24)
+MAX_COMMENT_PAGES = 10
+BOT_LOGIN = "github-actions[bot]"
+CAPPED_MARKER = "<!-- agent-implement:capped -->"
+FAILED_MARKER = "<!-- agent-implement:failed -->"
+NOTICES = ("capped", "failed")
 
 ISSUE_FILE = Path(".agent-issue.md")
 EXCLUDE_FILE = Path(".git/info/exclude")
@@ -434,12 +450,73 @@ def make_report(verdict: Verdict) -> Report:
     return Report("\n".join(lines), tuple(labels), proceed)
 
 
-def has_marker(comments: list[Any]) -> bool:
-    """Whether one of these comments is our own earlier assessment."""
+def has_marker(comments: list[Any], marker: str = MARKER) -> bool:
+    """Whether one of these comments is one of our own earlier ones."""
     return any(
-        isinstance(comment, dict) and MARKER in str(comment.get("body") or "")
+        isinstance(comment, dict) and marker in str(comment.get("body") or "")
         for comment in comments
     )
+
+
+# --- the daily cap ---
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_cap(raw: str) -> int:
+    """The number of assessments allowed per day: empty means the default, 0 means none."""
+    text = raw.strip()
+    if not text:
+        return DEFAULT_DAILY_CAP
+    if not re.fullmatch(r"[0-9]{1,4}", text):
+        raise ValueError("the daily cap is not a number from 0 to 9999")
+    return int(text)
+
+
+def _is_recent_assessment(comment: Any, since: datetime) -> bool:
+    if not isinstance(comment, dict):
+        return False
+    user = comment.get("user")
+    if not isinstance(user, dict) or user.get("login") != BOT_LOGIN:
+        return False
+    if MARKER not in str(comment.get("body") or ""):
+        return False
+    try:
+        created = datetime.strptime(
+            str(comment.get("created_at")), "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return created >= since
+
+
+def recent_assessments(repo: str, token: str, since: datetime, limit: int) -> int:
+    """How many assessments the repository has had since `since`, counting up to `limit`.
+
+    GitHub's `since` filter is on when a comment was last edited, so each comment's own
+    creation time is checked as well.
+    """
+    stamp = urllib.parse.quote(since.strftime("%Y-%m-%dT%H:%M:%SZ"), safe="")
+    count = 0
+    for page in range(1, MAX_COMMENT_PAGES + 1):
+        batch = triage.github_request(
+            "GET",
+            repo,
+            f"/issues/comments?since={stamp}&per_page=100&page={page}",
+            token,
+        )
+        if not isinstance(batch, list):
+            break
+        for comment in batch:
+            if _is_recent_assessment(comment, since):
+                count += 1
+                if count >= limit:
+                    return count
+        if len(batch) < 100:
+            break
+    return count
 
 
 def apply_report(
@@ -567,6 +644,68 @@ def run_prompt(stage: str) -> None:
         f.write(f"prompt<<{delimiter}\n{prompt}\n{delimiter}\n")
 
 
+def _cap_from_environment() -> int:
+    try:
+        return parse_cap(os.environ.get("DAILY_CAP", ""))
+    except ValueError as reason:
+        _fail(f"DAILY_CAP: {reason}.")
+
+
+def run_check_cap() -> None:
+    repo, token, number = _settings()
+    cap = _cap_from_environment()
+    capped = (
+        cap == 0 or recent_assessments(repo, token, _now() - CAP_WINDOW, cap) >= cap
+    )
+    if capped:
+        print(
+            f"The daily limit of {cap} assessments has been reached; #{number} waits."
+        )
+    _set_output("capped", str(capped).lower())
+
+
+def _run_url(repo: str) -> str | None:
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if not re.fullmatch(r"https://[A-Za-z0-9.-]+", server) or not re.fullmatch(
+        r"[0-9]+", run_id
+    ):
+        return None
+    return f"{server}/{repo}/actions/runs/{run_id}"
+
+
+def run_notify(kind: str) -> None:
+    repo, token, number = _settings()
+    marker = CAPPED_MARKER if kind == "capped" else FAILED_MARKER
+    comments = triage.github_request(
+        "GET", repo, f"/issues/{number}/comments?per_page=100", token
+    )
+    if has_marker(comments if isinstance(comments, list) else [], marker):
+        print(f"#{number} has already been told ({kind}); leaving it alone.")
+        return
+    if kind == "capped":
+        cap = _cap_from_environment()
+        body = (
+            f"This issue was not assessed: the repository has reached its limit of {cap} "
+            "automated assessments in the last 24 hours, so no model was run on it. "
+            "Apply `ready-to-implement` again later to try again.\n\n"
+            f"{CAPPED_MARKER}"
+        )
+    else:
+        url = _run_url(repo)
+        log = f" The log is here: {url}" if url else ""
+        body = (
+            "A run for this issue failed before it finished, so no pull request was "
+            f"opened by it. Nothing was merged, approved or closed.{log}\n\n"
+            "A maintainer can try again by removing and re-applying "
+            f"`ready-to-implement`.\n\n{FAILED_MARKER}"
+        )
+    triage.github_request(
+        "POST", repo, f"/issues/{number}/comments", token, {"body": body}
+    )
+    print(f"Left the {kind} comment on #{number}.")
+
+
 def run_check_tools() -> None:
     problems = check_command_tools(os.environ.get("COMMAND_TOOLS", ""))
     if problems:
@@ -599,6 +738,7 @@ COMMANDS = {
     "report": run_report,
     "check-changes": run_check_changes,
     "check-tools": run_check_tools,
+    "check-cap": run_check_cap,
 }
 
 
@@ -607,10 +747,18 @@ def main(argv: list[str]) -> None:
     handler: Callable[[], None]
     if command == "prompt" and len(args) == 1 and args[0] in STAGES:
         handler = partial(run_prompt, args[0])
+    elif command == "notify" and len(args) == 1 and args[0] in NOTICES:
+        handler = partial(run_notify, args[0])
     elif command in COMMANDS and not args:
         handler = COMMANDS[command]
     else:
-        names = "|".join([*COMMANDS, "prompt {" + "|".join(STAGES) + "}"])
+        names = "|".join(
+            [
+                *COMMANDS,
+                "prompt {" + "|".join(STAGES) + "}",
+                "notify {" + "|".join(NOTICES) + "}",
+            ]
+        )
         print(f"usage: implement.py {{{names}}}", file=sys.stderr)
         sys.exit(2)
     try:

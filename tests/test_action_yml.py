@@ -9,7 +9,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 # What the runner provides to every step, so action.yml does not have to set it.
-PROVIDED_BY_THE_RUNNER = {"GITHUB_EVENT_PATH", "GITHUB_OUTPUT", "GITHUB_REPOSITORY"}
+PROVIDED_BY_THE_RUNNER = {
+    "GITHUB_EVENT_PATH",
+    "GITHUB_OUTPUT",
+    "GITHUB_REPOSITORY",
+    "GITHUB_RUN_ID",
+    "GITHUB_SERVER_URL",
+}
 
 # The last value is the environment variables the code reads that this action's stage
 # does not need: implement.py serves three actions, and each uses some of what it reads.
@@ -39,15 +45,22 @@ ACTIONS = [
         ROOT / "implement" / "report" / "action.yml",
         ["src/implement.py"],
         "src/implement.py",
-        {"REPO_NOTES", "ACTOR_LOGIN", "COMMAND_TOOLS"},
+        {"REPO_NOTES", "ACTOR_LOGIN", "COMMAND_TOOLS", "DAILY_CAP"},
         id="implement-report",
     ),
     pytest.param(
         ROOT / "implement" / "fix" / "action.yml",
         ["src/implement.py"],
         "src/implement.py",
-        {"VERDICT"},
+        {"VERDICT", "DAILY_CAP"},
         id="implement-fix",
+    ),
+    pytest.param(
+        ROOT / "implement" / "notify" / "action.yml",
+        ["src/implement.py"],
+        "src/implement.py",
+        {"VERDICT", "REPO_NOTES", "ACTOR_LOGIN", "COMMAND_TOOLS"},
+        id="implement-notify",
     ),
 ]
 

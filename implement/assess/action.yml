@@ -33,8 +33,15 @@ inputs:
     description: 'Most back-and-forth exchanges the model may take'
     required: false
     default: '12'
+  daily_cap:
+    description: 'The most assessments the repository gets in 24 hours, counted from the assessment comments the workflow has left. Empty means 5; 0 stops every run. A soft limit: runs that start side by side can pass the check together.'
+    required: false
+    default: ''
 
 outputs:
+  capped:
+    description: "'true' if the daily limit stopped this run before any model ran; the report stage then leaves its notice instead of an assessment."
+    value: ${{ steps.cap.outputs.capped }}
   verdict:
     description: "The model's verdict as a JSON string, to be validated by the report stage; never trust it before that."
     value: ${{ steps.model.outputs.structured_output }}
@@ -67,13 +74,24 @@ runs:
         ACTOR_LOGIN: ${{ inputs.actor_login }}
       run: python ${{ github.action_path }}/../../src/implement.py fetch
 
+    - name: Check the daily limit
+      id: cap
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        DAILY_CAP: ${{ inputs.daily_cap }}
+      run: python ${{ github.action_path }}/../../src/implement.py check-cap
+
     - name: Build the verdict schema
       id: contract
+      if: steps.cap.outputs.capped != 'true'
       shell: bash
       run: python ${{ github.action_path }}/../../src/implement.py schema
 
     - name: Build the prompt
       id: prompt
+      if: steps.cap.outputs.capped != 'true'
       shell: bash
       env:
         REPO_NOTES: ${{ inputs.repository_notes }}
@@ -81,6 +99,7 @@ runs:
 
     - name: Assess the issue
       id: model
+      if: steps.cap.outputs.capped != 'true'
       uses: anthropics/claude-code-action@8d70a0dd265122bd65b8e09d3d959e65373ae2a1 # v1.0.260
       with:
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
@@ -94,7 +113,7 @@ runs:
           --json-schema '${{ steps.contract.outputs.schema }}'
 
     - name: Report how long the run took
-      if: always()
+      if: always() && steps.model.outcome != 'skipped'
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.model.outputs.execution_file }}

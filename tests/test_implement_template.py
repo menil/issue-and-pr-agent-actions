@@ -13,7 +13,7 @@ from test_action_yml import _declared_inputs
 
 ROOT = Path(__file__).resolve().parent.parent
 TEXT = (ROOT / "implement" / "example-workflow.yml").read_text(encoding="utf-8")
-JOBS = ("assess", "report", "fix")
+JOBS = ("assess", "report", "fix", "notify")
 
 
 def _job(name: str) -> str:
@@ -197,6 +197,7 @@ def test_nothing_is_granted_by_default() -> None:
 def test_each_job_asks_for_exactly_what_it_needs() -> None:
     assert _permissions(_job("assess")) == {"contents": "read", "issues": "read"}
     assert _permissions(_job("report")) == {"issues": "write"}
+    assert _permissions(_job("notify")) == {"issues": "write"}
     assert _permissions(_job("fix")) == {
         "contents": "write",
         "pull-requests": "write",
@@ -220,10 +221,12 @@ def test_only_the_jobs_that_run_the_model_see_the_claude_token() -> None:
     assert set(re.findall(r"secrets\.(\w+)", TEXT)) == {"CLAUDE_CODE_OAUTH_TOKEN"}
     assert "secrets." in _job("assess") and "secrets." in _job("fix")
     assert "secrets." not in _job("report")
+    assert "secrets." not in _job("notify")
 
 
-def test_the_report_job_checks_nothing_out() -> None:
-    assert "checkout" not in _job("report")
+@pytest.mark.parametrize("name", ["report", "notify"])
+def test_the_jobs_that_only_write_a_comment_check_nothing_out(name: str) -> None:
+    assert "checkout" not in _job(name)
 
 
 @pytest.mark.parametrize("name", ["assess", "fix"])
@@ -236,6 +239,7 @@ def test_the_jobs_run_in_order_and_the_fix_needs_both() -> None:
     assert "needs:" not in _job("assess")
     assert re.search(r"needs: assess\s", _job("report"))
     assert re.search(r"needs: \[assess, report\]", _job("fix"))
+    assert re.search(r"needs: \[assess, report, fix\]", _job("notify"))
 
 
 def test_one_run_per_issue_and_none_is_cancelled_halfway() -> None:
@@ -309,3 +313,112 @@ def test_the_commands_in_the_example_pass_the_check_they_will_meet() -> None:
     assert len(tools) == 2
     for value in tools:
         assert implement.check_command_tools(value) == [], value
+
+
+# --- the daily limit and the failure comment ---
+
+
+def _step(job: str, name: str) -> str:
+    parts = re.split(r"(?m)^      - ", _job(job))
+    return next(part for part in parts if part.startswith(f"name: {name}"))
+
+
+def _step_if(job: str, name: str) -> str:
+    match = re.search(r"(?m)^        if: (.*)$", _step(job, name))
+    assert match, (job, name)
+    return match.group(1)
+
+
+def _after_assess(capped: str | None) -> dict[str, Any]:
+    outputs = {} if capped is None else {"capped": capped}
+    return {"needs": {"assess": {"result": "success", "outputs": outputs}}}
+
+
+@pytest.mark.parametrize(
+    ("capped", "assessed", "told"),
+    [
+        ("false", True, False),
+        ("true", False, True),
+        ("", True, False),
+        (None, True, False),
+    ],
+)
+def test_a_run_the_limit_stopped_is_told_so_and_not_assessed(
+    capped: str | None, assessed: bool, told: bool
+) -> None:
+    context = _after_assess(capped)
+    assert (
+        bool(evaluate(_step_if("report", "Write the assessment"), context)) is assessed
+    )
+    assert (
+        bool(evaluate(_step_if("report", "Say the daily limit was reached"), context))
+        is told
+    )
+
+
+def test_the_two_report_steps_are_never_both_on_or_both_off() -> None:
+    for capped in ("true", "false", "", None):
+        context = _after_assess(capped)
+        first = bool(evaluate(_step_if("report", "Write the assessment"), context))
+        second = bool(
+            evaluate(_step_if("report", "Say the daily limit was reached"), context)
+        )
+        assert first != second, capped
+
+
+def test_a_run_the_limit_stopped_does_not_go_on_to_fix() -> None:
+    """The fix needs the report's proceed output, which a skipped step never writes."""
+    context = {"needs": {"report": {"result": "success", "outputs": {}}}}
+    assert not evaluate(_condition("fix"), context)
+
+
+@pytest.mark.parametrize(
+    ("results", "says"),
+    [
+        ({"assess": "success", "report": "success", "fix": "success"}, False),
+        ({"assess": "failure", "report": "skipped", "fix": "skipped"}, True),
+        ({"assess": "success", "report": "failure", "fix": "skipped"}, True),
+        ({"assess": "success", "report": "success", "fix": "failure"}, True),
+        ({"assess": "success", "report": "success", "fix": "skipped"}, False),
+        ({"assess": "skipped", "report": "skipped", "fix": "skipped"}, False),
+        ({"assess": "cancelled", "report": "skipped", "fix": "skipped"}, False),
+    ],
+)
+def test_a_failed_stage_is_reported_and_nothing_else_is(
+    results: dict[str, str], says: bool
+) -> None:
+    context = {"needs": {name: {"result": result} for name, result in results.items()}}
+    assert bool(evaluate(_condition("notify"), context)) is says
+
+
+def test_the_limit_comes_from_a_repository_variable_in_both_places_it_is_used() -> None:
+    assert TEXT.count("daily_cap: ${{ vars.AGENT_DAILY_CAP }}") == 2
+
+
+def test_the_two_notices_ask_for_the_two_kinds() -> None:
+    assert "kind: capped" in _step("report", "Say the daily limit was reached")
+    assert "kind: failed" in _job("notify")
+
+
+def _declared_outputs(job: str) -> set[str]:
+    match = re.search(r"(?ms)^    outputs:\n(.*?)(?=^    \w|\Z)", _job(job))
+    return set(re.findall(r"(?m)^      (\w+):", match.group(1))) if match else set()
+
+
+def test_every_output_a_job_reads_from_another_is_one_that_job_declares() -> None:
+    """A job output that is read but never declared is just empty, and nothing fails."""
+    reads = set(re.findall(r"needs\.(\w+)\.outputs\.(\w+)", TEXT))
+    assert reads, "the template reads no job outputs at all"
+    for job, name in sorted(reads):
+        assert name in _declared_outputs(job), (
+            f"{job} does not declare the output {name}"
+        )
+
+
+def test_the_outputs_the_assess_job_declares_come_from_its_action() -> None:
+    assert re.search(
+        r"(?m)^      verdict: \$\{\{ steps\.assess\.outputs\.verdict \}\}", TEXT
+    )
+    assert re.search(
+        r"(?m)^      capped: \$\{\{ steps\.assess\.outputs\.capped \}\}", TEXT
+    )

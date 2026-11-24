@@ -203,6 +203,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 - **An issue opened by an owner, member or collaborator**, when the repository variable `AGENT_AUTO` is `true`. Off by default.
 - **The `ready-to-implement` label**, whoever wrote the issue. The person who applied it must have write access (the action checks, whoever the author is), so a stranger's issue only runs because a maintainer chose it.
 - **Never** for a bot, for an issue labelled `no-agent`, or for one that already has a `repro:*` label. To run an assessed issue again, remove its `repro:*` labels.
+- **Not past the daily limit.** At most `AGENT_DAILY_CAP` assessments (default 5, `0` pauses everything) in 24 hours, counted from the assessment comments the workflow has left. An issue the limit stops gets one comment saying so; apply `ready-to-implement` again later. It is a soft limit: runs that start side by side can pass it together, so a burst of issues can overshoot by its size.
 
 ### Setting it up
 
@@ -215,6 +216,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 - **One click per pull request.** A pull request opened with the workflow's own token does not run `validate` or the review on its own: GitHub creates those runs and holds them until a person clicks "Approve and run". That is the price of not putting a personal access token in a secret.
 - **The model is a risk even so.** It reads text an outsider may have written, with your Claude token in the job's environment and a test command it can edit and run. Write the allowed commands narrowly, keep `AGENT_AUTO` off in a repository with strangers' issues, and read the design document's section on what could still go wrong.
+- **A failed run says so, once.** If any stage fails, the issue gets one comment with a link to the log, and no pull request. It is not repeated for the same issue.
 - **It uses your subscription,** not an API key. One small issue took about 15 seconds of model time across the two stages in a trial; heavy use is unmeasured.
 
 ## Output safety

@@ -1,0 +1,60 @@
+name: 'AI Issue Implementation: notify'
+description: 'Leaves the one comment for a run the daily limit stopped, or for a run that failed, at most once per issue. No model runs here, and the text is fixed. Part of the implementation action (docs/implement-action.md).'
+author: 'meni'
+branding:
+  icon: 'message-circle'
+  color: 'blue'
+
+# Needs no checkout. Give the job issues: write and nothing else.
+inputs:
+  github_token:
+    description: 'GITHUB_TOKEN to write the comment (issues: write)'
+    required: false
+    default: '${{ github.token }}'
+  issue_number:
+    description: 'Number of the issue to comment on'
+    required: true
+  kind:
+    description: "'capped' for a run the daily limit stopped, 'failed' for a run that failed"
+    required: true
+  daily_cap:
+    description: 'The daily limit, as given to the assess stage; only used to say what it is in the capped comment'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.11'
+
+    - name: Check what to say
+      id: kind
+      shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+      run: |
+        set -euo pipefail
+        case "$KIND" in
+          capped|failed) echo "kind=$KIND" >> "$GITHUB_OUTPUT" ;;
+          *) echo "::error::kind must be capped or failed."; exit 1 ;;
+        esac
+
+    - name: Say the limit was reached
+      if: steps.kind.outputs.kind == 'capped'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        DAILY_CAP: ${{ inputs.daily_cap }}
+      run: python ${{ github.action_path }}/../../src/implement.py notify capped
+
+    - name: Say the run failed
+      if: steps.kind.outputs.kind == 'failed'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+      run: python ${{ github.action_path }}/../../src/implement.py notify failed

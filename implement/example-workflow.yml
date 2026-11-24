@@ -46,6 +46,7 @@ jobs:
       issues: read
     outputs:
       verdict: ${{ steps.assess.outputs.verdict }}
+      capped: ${{ steps.assess.outputs.capped }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -62,6 +63,9 @@ jobs:
           issue_number: ${{ github.event.issue.number }}
           # Only when a label started the run: that person must have write access.
           actor_login: ${{ github.event.action == 'labeled' && github.event.sender.login || '' }}
+          # At most this many assessments per 24 hours; 5 if the variable is not set, 0 to
+          # pause everything. A soft limit: runs that start side by side can pass it together.
+          daily_cap: ${{ vars.AGENT_DAILY_CAP }}
           # EDIT: the commands the model may run to reproduce a problem. Nothing else is
           # allowed apart from reading files. One command per pattern, comma-separated.
           command_tools: 'Bash(cargo test:*)'
@@ -80,10 +84,19 @@ jobs:
     steps:
       - name: Write the assessment
         id: report
+        if: needs.assess.outputs.capped != 'true'
         uses: menil/pr-code-review-action/implement/report@v1
         with:
           issue_number: ${{ github.event.issue.number }}
           verdict: ${{ needs.assess.outputs.verdict }}
+
+      - name: Say the daily limit was reached
+        if: needs.assess.outputs.capped == 'true'
+        uses: menil/pr-code-review-action/implement/notify@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          kind: capped
+          daily_cap: ${{ vars.AGENT_DAILY_CAP }}
 
   fix:
     needs: [assess, report]
@@ -111,3 +124,19 @@ jobs:
           command_tools: 'Bash(cargo test:*),Bash(cargo build:*)'
           repository_notes: |
             Run the tests with `cargo test`.
+
+  # One comment, once per issue, if any stage above failed, so a failure is not silent.
+  notify:
+    needs: [assess, report, fix]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Say the run failed
+        # EDIT: the same release tag as above.
+        uses: menil/pr-code-review-action/implement/notify@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          kind: failed
