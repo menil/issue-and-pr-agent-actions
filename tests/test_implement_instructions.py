@@ -77,6 +77,23 @@ def test_the_assessment_makes_an_unfounded_claim_the_worst_mistake() -> None:
     assert "`not_attempted` is always acceptable" in flat
 
 
+def test_the_assessment_makes_a_reading_claim_name_the_code() -> None:
+    flat = _words(ASSESS)
+    assert "`by_reading`" in flat
+    assert "name the file and line" in flat
+    assert "weaker than `yes`" in flat
+    assert "`by_reading` without pointing at the code" in flat
+
+
+def test_the_fix_shows_the_problem_before_it_changes_anything() -> None:
+    flat = _words(FIX)
+    assert flat.index("write a test that shows the problem") < flat.index(
+        "make the smallest change that fixes it"
+    )
+    assert flat.index("it must fail") < flat.index("make the smallest change")
+    assert flat.index("make the smallest change") < flat.index("run the tests again")
+
+
 def test_the_assessment_does_not_judge_what_is_worth_doing() -> None:
     assert "do not judge whether it is worth doing" in _words(ASSESS)
 
@@ -94,7 +111,10 @@ def test_the_assessment_cannot_write_anything() -> None:
         "any lockfile",
         "do not create files other than the test",
         "do not edit `.agent-issue.md`",
-        "add a test that fails without your change",
+        "write a test that shows the problem",
+        "it must fail, and for the reason the issue gives",
+        "if you cannot write such a test, or it passes",
+        "the new test and the existing ones must pass",
         "change nothing",
     ],
 )

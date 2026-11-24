@@ -15,11 +15,15 @@ reach the network.
 ## What to do
 
 1. Read the issue and the code it concerns.
-2. Make the smallest change that fixes it or does what it asks. Follow the style of the
-   code around it. Do not refactor, rename or tidy anything unrelated.
-3. Add a test that fails without your change and passes with it, next to the repository's
-   existing tests and in their style. A fix without a test is not finished.
-4. Run the tests with the command the repository notes below name, and make them pass.
+2. Write a test that shows the problem, next to the repository's existing tests and in their
+   style, and run it with the command the repository notes below name. It must fail, and for
+   the reason the issue gives. This is how the problem is shown to be real: the assessment
+   may only have read the code.
+3. If you cannot write such a test, or it passes, the issue is not what it said. Change
+   nothing and stop.
+4. Make the smallest change that fixes it. Follow the style of the code around it. Do not
+   refactor, rename or tidy anything unrelated.
+5. Run the tests again. The new test and the existing ones must pass.
 
 ## What you must not do
 

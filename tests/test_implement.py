@@ -277,11 +277,21 @@ def test_text_is_cut_and_stripped_of_invisible_characters() -> None:
     assert "​" not in verdict.summary and "\U000e0041" not in verdict.summary
 
 
+@pytest.mark.parametrize("claim", ["yes", "by_reading"])
 @pytest.mark.parametrize("evidence", ["", "   \n", "​‍", "\U000e0049"])
 def test_a_claim_of_reproduction_without_evidence_is_not_believed(
-    evidence: str,
+    claim: str, evidence: str
 ) -> None:
-    assert _verdict(reproduced="yes", evidence=evidence).reproduced == "not_attempted"
+    """Both a claim of having run it and a claim of having read the fault need something to
+    point at; without it the honest word is not_attempted."""
+    assert _verdict(reproduced=claim, evidence=evidence).reproduced == "not_attempted"
+
+
+def test_a_claim_of_reading_the_fault_keeps_its_word_when_there_is_evidence() -> None:
+    verdict = _verdict(
+        reproduced="by_reading", evidence="src/main.rs:66 maps every error"
+    )
+    assert verdict.reproduced == "by_reading"
 
 
 @pytest.mark.parametrize("reproduced", ["no", "not_applicable", "not_attempted"])
@@ -298,6 +308,11 @@ def test_only_a_claim_of_success_needs_evidence(reproduced: str) -> None:
         ("yes", "yes", "small", True),
         ("yes", "yes", "medium", True),
         ("yes", "not_applicable", "small", True),
+        ("yes", "by_reading", "small", True),
+        ("yes", "by_reading", "medium", True),
+        ("yes", "by_reading", "large", False),
+        ("no", "by_reading", "small", False),
+        ("unclear", "by_reading", "small", False),
         ("yes", "yes", "large", False),
         ("yes", "no", "small", False),
         ("yes", "not_attempted", "small", False),
@@ -319,7 +334,7 @@ def test_a_claim_without_evidence_does_not_pass_the_gate() -> None:
 ALL_COMBINATIONS = [
     _verdict(valid=v, reproduced=r, effort=e)
     for v in ("yes", "no", "unclear")
-    for r in ("yes", "no", "not_applicable", "not_attempted")
+    for r in ("yes", "by_reading", "no", "not_applicable", "not_attempted")
     for e in ("small", "medium", "large")
 ]
 
@@ -330,6 +345,7 @@ ALL_COMBINATIONS = [
         ("yes", "repro:confirmed"),
         ("no", "repro:failed"),
         ("not_applicable", "repro:not-applicable"),
+        ("by_reading", "repro:by-reading"),
     ],
 )
 def test_reproduction_becomes_a_label(reproduced: str, label: str) -> None:
@@ -358,6 +374,7 @@ def test_the_table_of_labels_is_exactly_this() -> None:
         "repro:confirmed",
         "repro:failed",
         "repro:not-applicable",
+        "repro:by-reading",
         "effort:small",
         "effort:medium",
         "effort:large",
