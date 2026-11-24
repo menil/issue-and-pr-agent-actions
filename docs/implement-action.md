@@ -214,6 +214,32 @@ ready for review. Set `draft: 'true'` on the step to get the old behaviour. The 
 checked to be exactly `true` or `false` before anything is pushed. The notice in the pull
 request text no longer says "as a draft", because whether it is one is the workflow's choice.
 
+## After the pull request is open
+
+The issue still carried `ready-to-implement`, which says "work on this", and nothing said a
+pull request existed: `Refs #N` mentions the issue but does not show in its Development
+sidebar. So a `finish` job runs after `fix`, with `issues: write` and nothing else, and no
+model:
+
+- It takes `ready-to-implement` off. The workflow does not listen for `unlabeled`, so this
+  starts nothing, and applying the label again later still starts a run.
+- It puts `pr-open` on, creating it with a fixed colour and description if it is missing.
+- It leaves one comment, `A pull request was opened for this issue: #N ...`, whose hidden
+  marker names the pull request: a repeated run does not say it twice, and a second attempt
+  that opens another pull request is told.
+
+The only input is the pull request URL the fix reports, accepted only in the exact form
+`https://github.com/<this repository>/pull/<digits>` (owner and name compared without regard
+to case); the labels and the text are constants. The comment comes last, after the labels, as
+in `report`, so its marker means the issue was tidied. A failure here does not fail the run
+and does not make `notify` comment, as with the review.
+
+**A known gap:** nothing removes `pr-open` when the pull request is merged or closed. The
+workflow listens to issues, not to pull requests, and a second workflow for that was left
+out. Take it off by hand when you run an issue again; the labels and comments of a merged
+issue are history. **[TBD]** a `pull_request: closed` workflow if the stale label becomes a
+burden.
+
 ## What the spike found
 
 Run in a private sandbox repository on a small invented bug (a slug function that kept
@@ -245,16 +271,17 @@ implement/
   assess/action.yml          reads the issue (trusted author only), runs the model, outputs the verdict
   report/action.yml          validates the verdict, writes labels and the comment, outputs the gate
   fix/action.yml             reads the issue, runs the model, refuses .github/ changes, commits, pushes, opens the PR
+  finish/action.yml          once the PR is open: drops ready-to-implement, adds pr-open, links the PR (no model)
   assess_instruction.md      what the assessment may do and must return
   fix_instruction.md         how to work an issue, in a plain file (not tool-specific)
 src/implement.py             the shared code: issue fetch and author check, verdict validation, label map, gate
 docs/implement-action.md     this document
 ```
 
-`src/implement.py` has six commands, one per job of work: `fetch` (the author check and
+`src/implement.py` has seven commands, one per job of work: `fetch` (the author check and
 the issue file), `schema` (the verdict contract, as the JSON schema the model is held to),
 `prompt` (an instruction file plus the repository's notes), `report` (verdict validation,
-labels, comment, gate), `check-changes` (what may be committed) and `check-tools` (refuses a
+labels, comment, gate), `check-changes` (what may be committed) `finish` (tidies the issue once the pull request is open) and `check-tools` (refuses a
 list of allowed commands that would hand the model a shell, the network, git, the
 environment, a way to read any file, or an interpreter with nothing after it). It reuses
 `src/sanitize.py` and the label-writing helpers of `src/triage.py`. The instruction files
