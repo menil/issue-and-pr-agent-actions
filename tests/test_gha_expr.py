@@ -72,3 +72,42 @@ def test_expressions(expression: str, expected: Any) -> None:
 def test_anything_unsupported_is_an_error_not_a_guess(expression: str) -> None:
     with pytest.raises(ValueError):
         evaluate(expression, CTX)
+
+
+def _needs(**results: str) -> dict[str, Any]:
+    return {"needs": {name: {"result": result} for name, result in results.items()}}
+
+
+@pytest.mark.parametrize(
+    ("expression", "results", "expected"),
+    [
+        ("failure()", {"a": "success", "b": "failure"}, True),
+        ("failure()", {"a": "success", "b": "skipped"}, False),
+        ("failure()", {"a": "cancelled"}, False),
+        ("failure()", {}, False),
+        ("success()", {"a": "success", "b": "skipped"}, True),
+        ("success()", {"a": "failure"}, False),
+        ("success()", {"a": "cancelled"}, False),
+        ("cancelled()", {"a": "cancelled"}, True),
+        ("cancelled()", {"a": "success"}, False),
+        ("always()", {"a": "failure"}, True),
+        ("!failure() && success()", {"a": "skipped"}, True),
+    ],
+)
+def test_status_functions_look_at_the_jobs_waited_for(
+    expression: str, results: dict[str, str], expected: bool
+) -> None:
+    assert evaluate(expression, _needs(**results)) is expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["Failure()", "FAILURE()", "failure(1)", "failure", "always(x)", "success( )x"],
+)
+def test_status_functions_are_exact_and_take_no_arguments(expression: str) -> None:
+    try:
+        value = evaluate(expression, _needs(a="failure"))
+    except ValueError:
+        return
+    # A bare name is only a context lookup that finds nothing.
+    assert expression == "failure" and value is None

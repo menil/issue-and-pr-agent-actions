@@ -537,7 +537,7 @@ ENV = {
 
 
 def _run(
-    command: str,
+    command: str | list[str],
     api: FakeGitHub,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -549,7 +549,7 @@ def _run(
     full = {**ENV, "GITHUB_OUTPUT": str(output), **env}
     with patch.dict(os.environ, full, clear=True), patch("triage.github_request", api):
         try:
-            implement.main([command])
+            implement.main([command] if isinstance(command, str) else command)
             code = 0
         except SystemExit as exit_:
             code = int(exit_.code or 0)

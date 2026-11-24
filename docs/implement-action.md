@@ -111,7 +111,7 @@ steer it, what it can reach, and what a stolen token could do.
 | What that code can reach | **A known gap.** The Claude token is in the job's environment while it runs, so such code could read it, and the network is open (next row). Nothing removes the token today. **[TBD]** run the tests in a later step that does not hold the token, or scrub the environment of the subprocess. |
 | Network | Whatever the runner allows. A fooled run could send the token out. The token is bound to your subscription, so rotate it if a run is ever suspect. **[TBD]** whether an egress allowlist is practical. |
 | Never `pull_request_target` | The wrapper triggers only on `issues`. No fork code is checked out. |
-| Bounds | `--max-turns` and a job timeout; one run per issue; a daily cap on runs per repository **[TBD]**. |
+| Bounds | `--max-turns` and a job timeout; one run per issue; a daily limit on assessments per repository (`AGENT_DAILY_CAP`, default 5, `0` pauses everything). It counts the assessment comments the workflow's own bot has left in 24 hours, checked after the author and before any model runs. It is a **soft limit**: runs for different issues start side by side and can pass the check together before any of them has left a comment, so a burst can overshoot by its size. A run the limit stops gets one comment saying so, and a run that fails gets one comment with a link to its log; each is left once per issue. |
 | Output | Draft PRs only; no auto-merge; `validate` required; CODEOWNERS or branch protection on `.github/`. |
 
 ## Other people's issues
@@ -226,14 +226,14 @@ step holds the Claude token.
 
 Answered by the spike: which token opens the pull request (`GITHUB_TOKEN`, plus the
 Actions setting and one click for the checks); whether the subscription carries the
-runs (yes, for one small issue). Answered since: how `implement/` is packaged (three
-composite actions and a thin wrapper, see Decisions).
+runs (yes, for one small issue). Answered since: how `implement/` is packaged (composite actions
+and a thin wrapper, see Decisions), and the daily limit.
 
 - **[TBD]** What do the subscription's terms say about automation in CI? The runs worked;
   the terms are not checked.
 - **[TBD]** Can the test run be taken out of the step that holds the token, or the
   environment scrubbed, to close the arbitrary-code gap?
 - **[TBD]** Is an egress allowlist practical on hosted runners?
-- **[TBD]** The `effort` cut-off, and the daily cap per repository.
+- **[TBD]** The `effort` cut-off (today `large` stops the fix; whether `medium` should too).
 - **[TBD]** Whether a failed assessment on a maintainer's own issue should add
   `needs-info`, or stay silent apart from the comment.

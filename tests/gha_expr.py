@@ -2,7 +2,8 @@
 templates use, so a workflow's `if:` can be tested by what it decides, not by its text.
 
 It supports string literals, context paths (with the `.*.` filter), `!`, `==`, `!=`, `&&`,
-`||`, parentheses, and the functions contains, join and fromJSON. Anything else raises, so
+`||`, parentheses, the functions contains, join and fromJSON, and the status functions
+failure(), success(), always() and cancelled(). Anything else raises, so
 a template that starts using more cannot be silently mis-evaluated."""
 
 import json
@@ -21,6 +22,8 @@ _TOKEN = re.compile(
 # template pass here that GitHub rejects, which is the wrong direction for a test double.
 _FUNCTIONS = {"contains", "join", "fromJSON"}
 _LITERALS = {"true": True, "false": False, "null": None}
+# Status functions take no arguments and look at the results of the jobs this one needs.
+_STATUS = {"failure", "success", "always", "cancelled"}
 
 
 def _tokens(text: str) -> list[tuple[str, str]]:
@@ -102,6 +105,17 @@ class _Parser:
             raise ValueError(f"unexpected {self._peek()!r}")
         return value
 
+    def _status(self, name: str) -> bool:
+        needs = self.context.get("needs") or {}
+        results = [n.get("result") for n in needs.values() if isinstance(n, dict)]
+        if name == "always":
+            return True
+        if name == "failure":
+            return "failure" in results
+        if name == "cancelled":
+            return "cancelled" in results
+        return not ({"failure", "cancelled"} & set(results))  # success
+
     def _or(self) -> Any:
         left = self._and()
         while self._peek() == ("op", "||"):
@@ -143,6 +157,10 @@ class _Parser:
             return inner
         if kind == "name":
             if self._peek() == ("op", "("):
+                if value in _STATUS:
+                    self._take("(")
+                    self._take(")")
+                    return self._status(value)
                 if value not in _FUNCTIONS:
                     raise ValueError(f"unsupported function {value}")
                 self._take("(")

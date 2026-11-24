@@ -92,7 +92,7 @@ runs:
           --disallowedTools "WebFetch,WebSearch,Bash(git:*)"
 
     - name: Report how long the run took
-      if: always()
+      if: always() && steps.model.outcome != 'skipped'
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.model.outputs.execution_file }}

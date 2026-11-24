@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-NAMES = ("assess", "report", "fix")
+NAMES = ("assess", "report", "fix", "notify")
 TEXT = {
     name: (ROOT / "implement" / name / "action.yml").read_text(encoding="utf-8")
     for name in NAMES
@@ -96,9 +96,12 @@ def test_no_way_around_the_write_access_check_is_switched_on(name: str) -> None:
 # --- the model ---
 
 
-def test_the_report_stage_has_no_model() -> None:
-    assert MODEL_ACTION not in TEXT["report"]
-    assert "claude_code_oauth_token" not in TEXT["report"]
+@pytest.mark.parametrize("name", ["report", "notify"])
+def test_the_stages_that_write_to_the_issue_have_no_model_and_no_token(
+    name: str,
+) -> None:
+    assert MODEL_ACTION not in TEXT[name]
+    assert "claude_code_oauth_token" not in TEXT[name]
 
 
 @MODEL_STAGES
@@ -185,7 +188,7 @@ def test_the_stages_pass_their_results_on() -> None:
 @MODEL_STAGES
 def test_how_long_a_run_took_is_reported_without_failing_it(name: str) -> None:
     step = next(s for s in _steps(name) if "execution_file" in s)
-    assert "if: always()" in step and "||" in step
+    assert "if: always() && steps.model.outcome != 'skipped'" in step and "||" in step
 
 
 # --- the fix stage: what happens after the model ---
@@ -239,3 +242,44 @@ def test_the_issue_number_is_checked_before_it_names_a_branch() -> None:
 
 def test_the_fix_script_stops_at_the_first_error() -> None:
     assert "set -euo pipefail" in _fix_script()
+
+
+# --- the daily limit ---
+
+
+def test_the_limit_is_checked_after_the_author_and_before_anything_is_spent() -> None:
+    text = TEXT["assess"]
+    assert text.index("implement.py fetch") < text.index("implement.py check-cap")
+    assert text.index("implement.py check-cap") < text.index("implement.py schema")
+    assert text.index("implement.py check-cap") < text.index(f"uses: {MODEL_ACTION}")
+
+
+def test_everything_after_the_limit_is_skipped_when_it_is_reached() -> None:
+    for marker in (
+        "implement.py schema",
+        "implement.py prompt assess",
+        f"uses: {MODEL_ACTION}",
+    ):
+        step = next(s for s in _steps("assess") if marker in s)
+        assert "if: steps.cap.outputs.capped != 'true'" in step, marker
+
+
+def test_the_run_size_is_still_reported_but_not_for_a_run_that_never_started() -> None:
+    step = next(s for s in _steps("assess") if "execution_file" in s)
+    assert "if: always() && steps.model.outcome != 'skipped'" in step
+
+
+def test_the_assess_stage_hands_the_limit_result_on() -> None:
+    head = TEXT["assess"].split("\nruns:\n")[0]
+    assert "value: ${{ steps.cap.outputs.capped }}" in head
+
+
+def test_the_limit_check_gets_its_number_from_an_input() -> None:
+    step = next(s for s in _steps("assess") if "check-cap" in s)
+    assert "DAILY_CAP: ${{ inputs.daily_cap }}" in step
+
+
+def test_notify_says_one_of_two_fixed_things_and_nothing_else() -> None:
+    assert "notify capped" in TEXT["notify"] and "notify failed" in TEXT["notify"]
+    check = next(body for body in _run_bodies("notify") if "KIND" in body)
+    assert "capped|failed" in check and "exit 1" in check
