@@ -227,10 +227,13 @@ def test_only_the_agents_own_branch_is_pushed_and_never_by_force() -> None:
     assert 'branch="agent/issue-${NUMBER}"' in script
 
 
-def test_the_pull_request_is_a_draft_with_fixed_text() -> None:
+def test_the_pull_request_is_ready_for_review_unless_a_draft_is_asked_for() -> None:
     script = _fix_script()
-    assert "gh pr create --draft" in script
-    assert "--title" in script and "--body" in script
+    assert "gh pr create" in script
+    # `--draft` is added only when the input says so, never unconditionally.
+    assert "gh pr create --draft" not in script
+    assert script.count("--draft") == 1 and 'DRAFT" == "true"' in script
+    assert "--title" in script and "--body-file" in script
     assert "gh pr merge" not in script and "gh pr ready" not in script
     assert "gh pr review" not in script and "--approve" not in script
 
@@ -283,3 +286,12 @@ def test_notify_says_one_of_two_fixed_things_and_nothing_else() -> None:
     assert "notify capped" in TEXT["notify"] and "notify failed" in TEXT["notify"]
     check = next(body for body in _run_bodies("notify") if "KIND" in body)
     assert "capped|failed" in check and "exit 1" in check
+
+
+def test_the_draft_input_defaults_to_a_pull_request_ready_for_review() -> None:
+    action = (ROOT / "implement" / "fix" / "action.yml").read_text(encoding="utf-8")
+    block = re.search(r"(?ms)^  draft:\n(.*?)(?=^  \w+:\n|^\w+:|\Z)", action)
+    assert block, "the fix action has no draft input"
+    assert "required: true" not in block.group(1)
+    assert "default: 'false'" in block.group(1)
+    assert "DRAFT: ${{ inputs.draft }}" in action
