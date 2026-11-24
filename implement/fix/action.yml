@@ -1,5 +1,5 @@
 name: 'AI Issue Implementation: fix'
-description: 'Lets the model edit files to fix an assessed issue, then refuses any change that must not be committed, commits, pushes agent/issue-N and opens a draft pull request. Third stage of the implementation action (docs/implement-action.md).'
+description: 'Lets the model edit files to fix an assessed issue, then refuses any change that must not be committed, commits, pushes agent/issue-N and opens a pull request. Third stage of the implementation action (docs/implement-action.md).'
 author: 'meni'
 branding:
   icon: 'git-pull-request'
@@ -33,6 +33,10 @@ inputs:
     description: 'Most back-and-forth exchanges the model may take'
     required: false
     default: '20'
+  draft:
+    description: "Open the pull request as a draft: 'true' or 'false'. The default is a pull request that is ready for review, because a person reviews it either way and a draft would be reviewed again when it is marked ready."
+    required: false
+    default: 'false'
   base_branch:
     description: 'The branch the pull request is opened against'
     required: false
@@ -40,7 +44,7 @@ inputs:
 
 outputs:
   pull_request_url:
-    description: 'The draft pull request that was opened'
+    description: 'The pull request that was opened'
     value: ${{ steps.open.outputs.pull_request_url }}
 
 runs:
@@ -101,19 +105,21 @@ runs:
         jq -sc '[.[] | if type=="array" then .[] else . end] | map(select(.type? == "result")) | last | {subtype, is_error, num_turns, duration_ms, total_cost_usd}' "$EXECUTION_FILE" \
           || echo "Could not read the execution file."
 
-    - name: Commit, push and open a draft pull request
+    - name: Commit, push and open a pull request
       id: open
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         NUMBER: ${{ inputs.issue_number }}
         BASE_BRANCH: ${{ inputs.base_branch }}
+        DRAFT: ${{ inputs.draft }}
         REPO: ${{ github.repository }}
         IMPLEMENT: ${{ github.action_path }}/../../src/implement.py
       run: |
         set -euo pipefail
         [[ "$NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::Not an issue number."; exit 1; }
         [[ "$BASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::Not a branch name."; exit 1; }
+        [[ "$DRAFT" == "true" || "$DRAFT" == "false" ]] || { echo "::error::draft must be true or false."; exit 1; }
 
         # Code, not the model, decides what may be committed. Renames are listed as a
         # delete and an add, and files the model created are included.
@@ -144,7 +150,11 @@ runs:
         git commit -q -F "$texts/commit.txt"
         git push "$remote" "$branch"
         failure="$(mktemp)"
-        if ! url=$(gh pr create --draft --base "$BASE_BRANCH" --head "$branch" \
+        # A draft only when asked for; the empty list is written so that it is safe under
+        # `set -u` in the older bash that some runners have.
+        draft_flag=()
+        if [[ "$DRAFT" == "true" ]]; then draft_flag=(--draft); fi
+        if ! url=$(gh pr create ${draft_flag[@]+"${draft_flag[@]}"} --base "$BASE_BRANCH" --head "$branch" \
           --title "$(cat "$texts/title.txt")" --body-file "$texts/body.md" 2> "$failure"); then
           sed 's/^/gh: /' "$failure"
           echo "::error::The branch $branch was pushed but the pull request could not be opened. If GitHub says Actions may not create pull requests, turn on 'Allow GitHub Actions to create and approve pull requests' under Settings, Actions, General. Then delete the branch and run again."

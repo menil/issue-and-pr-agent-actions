@@ -7,7 +7,7 @@ at the end.
 ## Goal
 
 For an issue the maintainer trusts, work out whether it is valid and whether it
-reproduces, and if both hold, write a fix and open a **draft** pull request for a
+reproduces, and if both hold, write a fix and open a pull request, ready for a
 human to review. It is free to run: the Claude subscription token only, no
 pay-per-token key, and no OpenRouter fallback for this stage.
 
@@ -41,7 +41,7 @@ from its documentation:
 | Who starts a run | By default only an issue **opened by someone with write access** (`author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`, checked in the workflow's `if:` and again by `fetch`). When a **label** starts it, the person who applied the label must have write access, whoever wrote the issue, because they are the one spending the run. Anyone else's issue starts nothing; see "Other people's issues". |
 | Automatic or not | Opt-in per repository by a variable, `AGENT_AUTO=true`, default off. With it off, nothing starts until a maintainer applies `ready-to-implement`. |
 | Stages | Three jobs, because a job's permissions are fixed for all its steps: **assess** (model, read-only), **report** (code only, `issues: write`), then **fix** (model, `contents` and `pull-requests: write`), only if the gate passed. |
-| What the model decides | A verdict and, in stage two, the code of a draft PR. Never a label, a comment's markdown, a branch name or a command outside the allowlist. |
+| What the model decides | A verdict and, in stage two, the code of a PR. Never a label, a comment's markdown, a branch name or a command outside the allowlist. |
 | Credentials | **Route A**: the workflow's own `GITHUB_TOKEN` and the Claude subscription token, and nothing else. No personal access token and no GitHub App is installed. The cost is one click per agent pull request (see below). |
 | Where it lives | Three composite actions in this repo, one per stage (`implement/assess`, `implement/report`, `implement/fix`), versioned with the other actions and used like `triage/`. Each repository has a thin wrapper workflow that declares the three jobs, their `permissions:` and the `AGENT_AUTO` rule, and calls one action per job. Not a reusable workflow: the permissions would then sit in this repository, out of sight of the repository that is handing them out. Not just files the wrapper checks out: the validation and the label map must be one tested copy. |
 
@@ -70,8 +70,8 @@ from its documentation:
 5. **Fix** (job `fix`). Permissions: `contents: write`, `pull-requests: write`,
    `issues: read` (it only reads the issue; labels and the comment are the `report`
    job's, so no write access to issues is needed here), **not** `workflows`. The model edits files and runs the test
-   command; the wrapper pushes the branch and opens the draft PR with a fixed
-   title and body template, linking the issue.
+   command; the wrapper pushes the branch and opens the PR with text that code builds
+   from the model's description (see "The text of the commit and the pull request").
 6. **After the PR.** `validate` and the review action run on it like on any pull
    request. A person reviews and merges. The agent never does.
 
@@ -123,7 +123,7 @@ steer it, what it can reach, and what a stolen token could do.
 | Network | Whatever the runner allows. A fooled run could send the token out. The token is bound to your subscription, so rotate it if a run is ever suspect. **[TBD]** whether an egress allowlist is practical. |
 | Never `pull_request_target` | The wrapper triggers only on `issues`. No fork code is checked out. |
 | Bounds | `--max-turns` and a job timeout; one run per issue; a daily limit on assessments per repository (`AGENT_DAILY_CAP`, default 5, `0` pauses everything). It counts the assessment comments the workflow's own bot has left in 24 hours, checked after the author and before any model runs. It is a **soft limit**: runs for different issues start side by side and can pass the check together before any of them has left a comment, so a burst can overshoot by its size. A run the limit stops gets one comment saying so, and a run that fails gets one comment with a link to its log; each is left once per issue. |
-| Output | Draft PRs only; no auto-merge; `validate` required; CODEOWNERS or branch protection on `.github/`. |
+| Output | A pull request a person must review and merge: no auto-merge, `validate` required, CODEOWNERS or branch protection on `.github/`. It is opened ready for review, not as a draft (see "Draft or ready for review"). |
 
 ## Other people's issues
 
@@ -138,7 +138,7 @@ data.
 
 ## Opening the pull request
 
-With Route A the wrapper pushes `agent/issue-N` and opens a draft pull request itself,
+With Route A the wrapper pushes `agent/issue-N` and opens a pull request itself,
 with `GITHUB_TOKEN`. Two consequences, both measured in the spike:
 
 - The repository setting "Allow GitHub Actions to create and approve pull requests"
@@ -192,6 +192,20 @@ commit message and the pull request text itself.
   starts, the changed-file check treats the name as protected, and a run whose only change
   is that file still counts as no change.
 
+## Draft or ready for review
+
+The first version opened every pull request as a draft, as one more signal that a model wrote
+it. On the first real pull requests that signal added little: a person reads the pull request either way, the text
+says it was written by a model, `validate` needs a click, and merging stays a human act. It
+also cost something. A draft has to be marked ready, which fires `ready_for_review` and starts
+every workflow that listens for it, so a repository whose review workflow does not step
+aside would review the same change twice.
+
+The fix action now has a `draft` input, `'false'` by default, so the pull request is opened
+ready for review. Set `draft: 'true'` on the step to get the old behaviour. The input is
+checked to be exactly `true` or `false` before anything is pushed. The notice in the pull
+request text no longer says "as a draft", because whether it is one is the workflow's choice.
+
 ## What the spike found
 
 Run in a private sandbox repository on a small invented bug (a slug function that kept
@@ -222,7 +236,7 @@ sees it.
 implement/
   assess/action.yml          reads the issue (trusted author only), runs the model, outputs the verdict
   report/action.yml          validates the verdict, writes labels and the comment, outputs the gate
-  fix/action.yml             reads the issue, runs the model, refuses .github/ changes, commits, pushes, opens the draft PR
+  fix/action.yml             reads the issue, runs the model, refuses .github/ changes, commits, pushes, opens the PR
   assess_instruction.md      what the assessment may do and must return
   fix_instruction.md         how to work an issue, in a plain file (not tool-specific)
 src/implement.py             the shared code: issue fetch and author check, verdict validation, label map, gate

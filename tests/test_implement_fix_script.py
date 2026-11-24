@@ -100,6 +100,7 @@ class Sandbox:
             "REPO": "o/r",
             "IMPLEMENT": str(ROOT / "src" / "implement.py"),
             "GITHUB_OUTPUT": str(self.output),
+            "DRAFT": "false",
         }
         return {**base, **overrides}
 
@@ -144,7 +145,7 @@ def box(tmp_path: Path) -> Sandbox:
     return Sandbox(tmp_path)
 
 
-def test_a_good_fix_is_pushed_on_its_own_branch_and_opened_as_a_draft(
+def test_a_good_fix_is_pushed_on_its_own_branch_and_opened_ready_for_review(
     box: Sandbox,
 ) -> None:
     box.write("slug.py", "x = 2\n")
@@ -159,8 +160,32 @@ def test_a_good_fix_is_pushed_on_its_own_branch_and_opened_as_a_draft(
     )
     log = box.gh_log.read_text()
     assert log.count("pr create") == 1
-    assert log.startswith("pr create --draft --base main --head agent/issue-17")
+    assert log.startswith("pr create --base main --head agent/issue-17")
+    assert "--draft" not in log
     assert "pull_request_url=https://github.com/o/r/pull/99" in box.output.read_text()
+
+
+def test_a_draft_is_opened_only_when_asked_for(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    done = box.run(DRAFT="true")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert box.gh_log.read_text().startswith(
+        "pr create --draft --base main --head agent/issue-17"
+    )
+
+
+# Hostile on purpose. The input ends up in a shell script, so besides near misses ("True",
+# "yes", "1") it includes a command-injection attempt ("true; touch x") and a value that
+# looks like an option ("--draft"). Each must be refused by the strict true/false check, and
+# the test also asserts that nothing was pushed and no pull request was opened.
+@pytest.mark.parametrize("value", ["", "yes", "True", "1", "true; touch x", "--draft"])
+def test_anything_but_true_or_false_for_the_draft_input_is_refused(
+    box: Sandbox, value: str
+) -> None:
+    box.write("slug.py", "x = 2\n")
+    done = box.run(DRAFT=value)
+    assert done.returncode != 0
+    assert box.remote_branches() == ["main"] and box.gh_calls() == []
 
 
 def test_a_refused_pull_request_says_which_setting_to_turn_on(box: Sandbox) -> None:

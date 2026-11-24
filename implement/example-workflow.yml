@@ -4,8 +4,8 @@
 #
 # What it does: for an issue by someone with write access (when AGENT_AUTO is on), or an
 # issue a maintainer labels ready-to-implement, a model assesses whether it is real and
-# reproducible; if so, another run writes a fix and opens a DRAFT pull request. A person
-# reviews and merges it. The model never merges, approves or labels.
+# reproducible; if so, another run writes a fix and opens a pull request, ready for
+# review (set `draft: 'true'` on the fix step for a draft). A person reviews and merges it. The model never merges, approves or labels.
 name: Implement issue
 
 on:
@@ -115,7 +115,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Fix the issue and open a draft pull request
+      - name: Fix the issue and open a pull request
         id: fix
         # EDIT: the same release tag as above.
         uses: menil/pr-code-review-action/implement/fix@v1
@@ -128,7 +128,7 @@ jobs:
           repository_notes: |
             Run the tests with `cargo test`.
 
-  # Reviews the draft pull request the fix opened. A pull request opened with the workflow's
+  # Reviews the pull request the fix opened. A pull request opened with the workflow's
   # own token does not start your repository's review workflow until a person clicks
   # "Approve and run", so the review is run from here, on the number of that pull request.
   # It reads the diff only: nothing from the pull request is checked out or run. A failed

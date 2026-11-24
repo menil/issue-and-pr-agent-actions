@@ -253,10 +253,16 @@ def test_the_pull_request_body_still_says_a_model_wrote_it_and_a_person_must_rea
     None
 ):
     body = pull_request_body(_change(), 63)
-    assert "Opened automatically from #63, as a draft." in body
+    assert "Opened automatically from #63. A model wrote this change" in body
     assert "A model wrote this change" in body
     assert "nothing here has been reviewed, merged or approved by it" in body
     assert "Read the change and its regression test before anything else." in body
+
+
+def test_the_notice_does_not_say_how_the_pull_request_was_opened() -> None:
+    """Whether it is a draft is the workflow's choice, so the text must not claim it."""
+    for text in (pull_request_body(_change(), 5), generic_change_texts(5)[2]):
+        assert "draft" not in text.lower()
 
 
 def test_a_complete_change_closes_the_issue_and_a_partial_one_does_not() -> None:
@@ -334,7 +340,7 @@ def test_the_generic_text_is_what_the_stage_always_used() -> None:
     assert title == "fix: address issue #17"
     assert message == "fix: address issue #17\n"
     assert body == (
-        "Opened automatically from #17, as a draft. A model wrote this change; nothing "
+        "Opened automatically from #17. A model wrote this change; nothing "
         "here has been reviewed, merged or approved by it. Read the change and its "
         "regression test before anything else.\n\nCloses #17"
     )

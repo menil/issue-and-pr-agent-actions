@@ -432,7 +432,7 @@ def commit_message(change: Change, number: int) -> str:
 
 
 _PULL_REQUEST_NOTICE = (
-    "Opened automatically from #{n}, as a draft. A model wrote this change{and_text}; "
+    "Opened automatically from #{n}. A model wrote this change{and_text}; "
     "nothing here has been reviewed, merged or approved by it. Read the change and its "
     "regression test before anything else."
 )
@@ -636,7 +636,7 @@ def make_report(verdict: Verdict) -> Report:
         if safe:
             lines += [f"**{heading}**", "", safe, ""]
     lines += [
-        "A draft pull request will be opened for a maintainer to review."
+        "A pull request will be opened for a maintainer to review."
         if proceed
         else "No pull request will be opened from this; a maintainer should decide what to do.",
         "",

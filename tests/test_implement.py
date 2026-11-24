@@ -407,9 +407,9 @@ def test_the_comment_carries_the_marker_once_and_the_fixed_fields() -> None:
 
 
 def test_the_comment_says_what_happens_next() -> None:
-    assert "draft pull request" in make_report(_verdict()).comment
+    assert "A pull request will be opened" in make_report(_verdict()).comment
     stopped = make_report(_verdict(valid="unclear")).comment
-    assert "draft pull request will" not in stopped
+    assert "pull request will be opened for a maintainer" not in stopped
     assert "maintainer" in stopped
 
 
