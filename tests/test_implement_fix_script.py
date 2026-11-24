@@ -220,6 +220,25 @@ def test_a_change_made_by_moving_a_file_out_of_a_protected_directory_is_refused(
     assert box.remote_branches() == ["main"]
 
 
+def test_a_symbolic_link_to_a_protected_place_is_refused(box: Sandbox) -> None:
+    """Writing through a link would change the workflows without the path showing it."""
+    os.symlink(".github", box.work / "docs-link")
+    box.write("slug.py", "x = 2\n")
+    done = box.run()
+    assert done.returncode != 0
+    assert "symbolic link" in done.stdout
+    assert box.remote_branches() == ["main"] and box.gh_calls() == []
+
+
+def test_a_change_made_through_a_symbolic_link_is_still_seen_at_its_real_path(
+    box: Sandbox,
+) -> None:
+    os.symlink(".github", box.work / "docs-link")
+    (box.work / "docs-link" / "workflows" / "validate.yml").write_text("name: pwned\n")
+    assert box.run().returncode != 0
+    assert box.remote_branches() == ["main"] and box.gh_calls() == []
+
+
 def test_no_change_is_not_a_pull_request(box: Sandbox) -> None:
     done = box.run()
     assert done.returncode != 0
@@ -286,14 +305,19 @@ def _input_check(name: str) -> str:
 
 
 def _run_input_check(
-    name: str, max_turns: str, tools: str
+    name: str, tmp_path: Path, max_turns: str, tools: str
 ) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    if not (bin_dir / "python").exists():
+        (bin_dir / "python").symlink_to(sys.executable)
     return subprocess.run(
         ["bash", "-c", _input_check(name)],
         env={
-            "PATH": os.environ["PATH"],
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "MAX_TURNS": max_turns,
             "COMMAND_TOOLS": tools,
+            "IMPLEMENT": str(ROOT / "src" / "implement.py"),
         },
         capture_output=True,
         text=True,
@@ -309,8 +333,10 @@ def _run_input_check(
         ("30", "Bash(just test)"),
     ],
 )
-def test_good_inputs_pass_the_check(name: str, max_turns: str, tools: str) -> None:
-    assert _run_input_check(name, max_turns, tools).returncode == 0
+def test_good_inputs_pass_the_check(
+    name: str, tmp_path: Path, max_turns: str, tools: str
+) -> None:
+    assert _run_input_check(name, tmp_path, max_turns, tools).returncode == 0
 
 
 @pytest.mark.parametrize("name", ["assess", "fix"])
@@ -326,11 +352,17 @@ def test_good_inputs_pass_the_check(name: str, max_turns: str, tools: str) -> No
         ("12", 'Bash(x)" --dangerouslySkipPermissions "'),
         ("12", "Bash(x)\n--allowedTools Bash"),
         ("12", 'a"b'),
+        ("12", "Bash"),
+        ("12", "Bash(*)"),
+        ("12", "Bash(bash:*)"),
+        ("12", "Bash(curl:*)"),
+        ("12", "Bash(cargo test:*),Bash(env)"),
+        ("12", "WebFetch"),
     ],
 )
-def test_inputs_that_could_break_out_of_the_quotes_are_refused(
-    name: str, max_turns: str, tools: str
+def test_inputs_that_could_break_out_or_open_too_much_are_refused(
+    name: str, tmp_path: Path, max_turns: str, tools: str
 ) -> None:
-    done = _run_input_check(name, max_turns, tools)
+    done = _run_input_check(name, tmp_path, max_turns, tools)
     assert done.returncode != 0
     assert "::error::" in done.stdout

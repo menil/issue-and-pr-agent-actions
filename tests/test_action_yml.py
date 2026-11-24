@@ -39,7 +39,7 @@ ACTIONS = [
         ROOT / "implement" / "report" / "action.yml",
         ["src/implement.py"],
         "src/implement.py",
-        {"REPO_NOTES", "ACTOR_LOGIN"},
+        {"REPO_NOTES", "ACTOR_LOGIN", "COMMAND_TOOLS"},
         id="implement-report",
     ),
     pytest.param(

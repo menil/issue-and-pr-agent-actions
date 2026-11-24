@@ -56,13 +56,12 @@ runs:
       env:
         MAX_TURNS: ${{ inputs.max_turns }}
         COMMAND_TOOLS: ${{ inputs.command_tools }}
+        IMPLEMENT: ${{ github.action_path }}/../../src/implement.py
       run: |
         set -euo pipefail
         [[ "$MAX_TURNS" =~ ^[0-9]+$ ]] || { echo "::error::max_turns must be a number."; exit 1; }
-        case "$COMMAND_TOOLS" in
-          '') echo "::error::command_tools must name at least one command."; exit 1 ;;
-          *'"'*|*$'\n'*) echo "::error::command_tools must not contain a double quote or a newline."; exit 1 ;;
-        esac
+        # Refuses a list that would hand the model a shell, the network or the environment.
+        python "$IMPLEMENT" check-tools
 
     - name: Read the issue, only if a trusted person stands behind it
       shell: bash

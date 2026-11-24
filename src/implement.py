@@ -12,6 +12,8 @@ Commands, run by the composite actions under implement/:
                  say whether the next stage may go ahead.
   check-changes  Read the paths the model changed (NUL-separated, on stdin) and refuse
                  anything that must not be committed.
+  check-tools    Refuse a list of allowed commands (COMMAND_TOOLS) that is broad enough
+                 to hand the model a shell, the network or the environment.
 
 The model never decides what is written. It returns a verdict; this code checks every
 field against a fixed contract, picks the labels from a fixed table, and builds the
@@ -108,6 +110,30 @@ LOCKFILES = frozenset(
         "packages.lock.json",
     }
 )
+
+# The commands a repository allows the model to run (command_tools) are the widest lever
+# in the design, so a careless pattern is refused before any model runs. This is a guard
+# against a mistake, not a sandbox: a narrow pattern that runs code, such as a test
+# runner, still runs the code the model wrote, which the design says plainly.
+DENIED_COMMANDS = frozenset(
+    {
+        # shells, and ways of running something else
+        "bash", "sh", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "sudo", "su", "doas",
+        "xargs", "eval", "exec", "source", ".",
+        # the environment, where the token is
+        "env", "printenv", "set", "export", "declare",
+        # the network
+        "curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp", "telnet",
+        "socat",
+        # git and gh: pushing and opening pull requests is the workflow's job
+        "git", "gh",
+        # ways of reading any file, such as /proc/self/environ
+        "cat", "tac", "head", "tail", "less", "more", "od", "xxd", "strings", "base64",
+    }
+)  # fmt: skip
+# An interpreter with nothing after it runs anything the model types.
+BARE_INTERPRETER = re.compile(r"python[0-9.]*|node(js)?|ruby|perl|php|deno|bun|lua")
+BASH_PATTERN = re.compile(r"Bash\(([^()]*)\)")
 
 ISSUE_FILE = Path(".agent-issue.md")
 EXCLUDE_FILE = Path(".git/info/exclude")
@@ -321,6 +347,37 @@ def _path_problem(raw: str) -> str | None:
     return None
 
 
+def check_command_tools(tools: str) -> list[str]:
+    """What is wrong with this list of allowed commands, if anything.
+
+    Each entry must be a `Bash(...)` pattern naming one command, and not one that gives
+    the model a shell, the network, git, the environment or a way to read any file; nor
+    an interpreter with nothing after it. Anything else, including other tools, is
+    refused: the tools every run has are written in the actions themselves.
+    """
+    if any(ch in tools for ch in '"\n\r'):
+        return ["the list contains a double quote or a line break"]
+    if not tools.strip():
+        return ["no command is allowed"]
+    problems: list[str] = []
+    for entry in (part.strip() for part in tools.split(",")):
+        match = BASH_PATTERN.fullmatch(entry)
+        if not match:
+            problems.append(f"not a Bash(...) pattern: {log_text(entry)}")
+            continue
+        # ":" and "*" only separate or widen what is allowed; the words are what it is.
+        words = match.group(1).replace(":", " ").replace("*", " ").split()
+        if not words:
+            problems.append(f"too broad, it allows any command: {log_text(entry)}")
+            continue
+        command = posixpath.basename(words[0]).lower()
+        if command in DENIED_COMMANDS:
+            problems.append(f"it would give the model {command}: {log_text(entry)}")
+        elif len(words) == 1 and BARE_INTERPRETER.fullmatch(command):
+            problems.append(f"an interpreter with no restriction: {log_text(entry)}")
+    return problems
+
+
 def check_changes(paths: list[str]) -> list[str]:
     """What is wrong with these changed paths, if anything. Empty means they may be
     committed. Each entry quotes a path only through log_text, so it is safe to print."""
@@ -330,7 +387,11 @@ def check_changes(paths: list[str]) -> list[str]:
             f"{len(paths)} files changed; at most {MAX_CHANGED_FILES} are allowed"
         )
     for raw in paths:
+        # A link is judged after the other checks: they are what make the path safe to
+        # look at on disk (relative, no control characters).
         problem = _path_problem(raw)
+        if problem is None and os.path.islink(raw):
+            problem = "a symbolic link"
         if problem:
             problems.append(f"{problem}: {log_text(raw)}")
     return problems
@@ -506,6 +567,15 @@ def run_prompt(stage: str) -> None:
         f.write(f"prompt<<{delimiter}\n{prompt}\n{delimiter}\n")
 
 
+def run_check_tools() -> None:
+    problems = check_command_tools(os.environ.get("COMMAND_TOOLS", ""))
+    if problems:
+        for problem in problems[:5]:
+            print(f"::error::command_tools: {problem}")
+        _fail("command_tools would give the model more than it should have.")
+    print("command_tools: every entry names one narrow command.")
+
+
 def run_check_changes() -> None:
     raw = sys.stdin.buffer.read()
     paths = [
@@ -528,6 +598,7 @@ COMMANDS = {
     "schema": run_schema,
     "report": run_report,
     "check-changes": run_check_changes,
+    "check-tools": run_check_tools,
 }
 
 
