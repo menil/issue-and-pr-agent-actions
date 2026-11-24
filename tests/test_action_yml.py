@@ -72,6 +72,28 @@ def _declared_inputs(text: str) -> set[str]:
     return set(re.findall(r"^  (\w+):\s*$", block, flags=re.MULTILINE))
 
 
+def _inputs_used(text: str) -> set[str]:
+    """The inputs read in `${{ ... }}` expressions, wherever in the expression they are
+    (`inputs.a || github.x` counts). A comment or a description that merely mentions
+    `inputs.x` is not a use, so it can neither invent one nor hide an unused input."""
+    return {
+        name
+        for expression in re.findall(r"\$\{\{(.*?)\}\}", text, flags=re.DOTALL)
+        for name in re.findall(r"\binputs\.(\w+)", expression)
+    }
+
+
+def test_only_an_expression_counts_as_using_an_input() -> None:
+    text = (
+        "# see inputs.in_comment\n"
+        "description: 'set inputs.in_description'\n"
+        "a: ${{ inputs.plain }}\n"
+        "b: ${{ inputs.first || github.event.x || inputs.second }}\n"
+        "c: ${{ github.event.inputs_not.here }}\n"
+    )
+    assert _inputs_used(text) == {"plain", "first", "second"}
+
+
 def _env_names_set(text: str) -> set[str]:
     block = text.split("\nruns:\n", 1)[1]
     return set(re.findall(r"^ {8}([A-Z][A-Z0-9_]*):", block, flags=re.MULTILINE))
@@ -93,7 +115,7 @@ def test_every_input_that_is_used_is_declared(
     action: Path, sources: list[str], script: str, unused_env: set[str]
 ) -> None:
     text = action.read_text()
-    used = set(re.findall(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", text))
+    used = _inputs_used(text)
     assert used <= _declared_inputs(text), used - _declared_inputs(text)
 
 
@@ -102,8 +124,7 @@ def test_every_declared_input_is_used(
     action: Path, sources: list[str], script: str, unused_env: set[str]
 ) -> None:
     text = action.read_text()
-    used = set(re.findall(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", text))
-    assert _declared_inputs(text) == used
+    assert _declared_inputs(text) == _inputs_used(text)
 
 
 @pytest.mark.parametrize(("action", "sources", "script", "unused_env"), ACTIONS)
@@ -127,3 +148,87 @@ def test_the_action_runs_a_script_that_exists(
 
 def test_the_triage_instructions_sit_beside_the_script() -> None:
     assert (ROOT / "src" / "triage_instruction.md").is_file()
+
+
+# --- reviewing a pull request that did not start the workflow ---
+
+REVIEW = (ROOT / "action.yml").read_text(encoding="utf-8")
+
+
+def test_the_review_can_be_pointed_at_a_pull_request_by_number() -> None:
+    assert "pull_request_number" in _declared_inputs(REVIEW)
+    block = re.search(r"(?ms)^  pull_request_number:\n(.*?)(?=^  \w+:\n|\Z)", REVIEW)
+    assert block and "required: true" not in block.group(1)
+    assert "default: ''" in block.group(1)
+
+
+def test_both_steps_that_need_the_number_take_it_from_the_input_before_the_event() -> (
+    None
+):
+    expression = "${{ inputs.pull_request_number || github.event.pull_request.number }}"
+    assert REVIEW.count(f"PR_NUMBER: {expression}") == 2
+    assert "PR_NUMBER: ${{ github.event.pull_request.number }}" not in REVIEW
+
+
+def _fetch_step() -> str:
+    match = re.search(
+        r"- name: Fetch PR Diff\n.*?run: \|\n(.*?)(?=\n    - name:)", REVIEW, re.S
+    )
+    assert match
+    return "\n".join(line[8:] for line in match.group(1).splitlines())
+
+
+@pytest.mark.parametrize("number", ["7", "123"])
+def test_the_diff_is_fetched_for_a_numeric_pull_request(
+    tmp_path: Path, number: str
+) -> None:
+    import subprocess
+
+    fake = tmp_path / "gh"
+    fake.write_text(f'#!/bin/sh\necho "$@" > "{tmp_path}/args"\necho diff\n')
+    fake.chmod(0o755)
+    done = subprocess.run(
+        ["bash", "-c", _fetch_step()],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "PR_NUMBER": number,
+            "REPOSITORY": "o/r",
+            "GH_TOKEN": "t",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "args").read_text().split() == [
+        "pr",
+        "diff",
+        number,
+        "--repo",
+        "o/r",
+    ]
+
+
+@pytest.mark.parametrize("number", ["", "x", "--help", "1 2", "12; id", "-3"])
+def test_the_diff_is_not_fetched_for_anything_but_a_number(
+    tmp_path: Path, number: str
+) -> None:
+    import subprocess
+
+    fake = tmp_path / "gh"
+    fake.write_text(f'#!/bin/sh\ntouch "{tmp_path}/called"\n')
+    fake.chmod(0o755)
+    done = subprocess.run(
+        ["bash", "-c", _fetch_step()],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "PR_NUMBER": number,
+            "REPOSITORY": "o/r",
+            "GH_TOKEN": "t",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode != 0
+    assert not (tmp_path / "called").exists()

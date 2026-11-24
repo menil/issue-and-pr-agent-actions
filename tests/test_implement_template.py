@@ -4,6 +4,7 @@ Its `if:` guards are run through an evaluator against a table of events, so they
 tested by what they decide; its permissions and wiring are read as text."""
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -195,6 +196,10 @@ def test_nothing_is_granted_by_default() -> None:
 
 
 def test_each_job_asks_for_exactly_what_it_needs() -> None:
+    assert _permissions(_job("review")) == {
+        "pull-requests": "write",
+        "contents": "read",
+    }
     assert _permissions(_job("assess")) == {"contents": "read", "issues": "read"}
     assert _permissions(_job("report")) == {"issues": "write"}
     assert _permissions(_job("notify")) == {"issues": "write"}
@@ -220,6 +225,7 @@ def test_no_job_can_touch_workflows_or_mint_tokens() -> None:
 def test_only_the_jobs_that_run_the_model_see_the_claude_token() -> None:
     assert set(re.findall(r"secrets\.(\w+)", TEXT)) == {"CLAUDE_CODE_OAUTH_TOKEN"}
     assert "secrets." in _job("assess") and "secrets." in _job("fix")
+    assert "secrets." in _job("review")  # the review is a model run too
     assert "secrets." not in _job("report")
     assert "secrets." not in _job("notify")
 
@@ -249,6 +255,12 @@ def test_one_run_per_issue_and_none_is_cancelled_halfway() -> None:
 
 def test_only_new_and_labelled_issues_are_events_it_listens_to() -> None:
     assert re.search(r"(?m)^on:\n  issues:\n    types: \[opened, labeled\]\n", TEXT)
+    code = re.sub(r"#.*", "", TEXT)
+    # The `on:` block, up to the next top-level key. Asserting it holds the issues trigger
+    # keeps a layout change from leaving the check looking at the wrong text.
+    block = re.search(r"(?ms)^on:\n(.*?)(?=^\S)", code)
+    assert block and "issues:" in block.group(1)
+    events = block.group(1)
     for banned in (
         "pull_request",
         "issue_comment",
@@ -256,7 +268,9 @@ def test_only_new_and_labelled_issues_are_events_it_listens_to() -> None:
         "workflow_dispatch",
         "schedule",
     ):
-        assert banned not in re.sub(r"#.*", "", TEXT)
+        assert banned not in events
+    # A pull request's own code or branch must never be what the workflow runs on.
+    assert "pull_request_target" not in code
 
 
 def test_nothing_the_issue_author_wrote_is_used_in_an_expression() -> None:
@@ -265,7 +279,7 @@ def test_nothing_the_issue_author_wrote_is_used_in_an_expression() -> None:
 
 
 def test_every_job_is_bounded_in_time() -> None:
-    for name in JOBS:
+    for name in (*JOBS, "review"):
         assert re.search(r"timeout-minutes: \d+", _job(name)), name
 
 
@@ -422,3 +436,124 @@ def test_the_outputs_the_assess_job_declares_come_from_its_action() -> None:
     assert re.search(
         r"(?m)^      capped: \$\{\{ steps\.assess\.outputs\.capped \}\}", TEXT
     )
+
+
+# --- reviewing the pull request the fix opened ---
+#
+# A pull request opened with the workflow's own token does not start the repository's own
+# review workflow until a person clicks "Approve and run". So the review is run from here,
+# on the number of the pull request the fix reports, and reads only its diff.
+
+
+def test_the_fix_reports_the_pull_request_it_opened() -> None:
+    assert re.search(
+        r"(?m)^      pull_request: \$\{\{ steps\.fix\.outputs\.pull_request_url \}\}",
+        _job("fix"),
+    )
+    assert re.search(r"(?m)^        id: fix$", _job("fix"))
+
+
+def test_the_review_runs_only_after_a_fix_that_opened_a_pull_request() -> None:
+    assert re.search(r"(?m)^    needs: fix$", _job("review"))
+    assert _condition("review") == "needs.fix.outputs.pull_request != ''"
+    assert evaluate(
+        _condition("review"),
+        {
+            "needs": {
+                "fix": {"outputs": {"pull_request": "https://github.com/o/r/pull/9"}}
+            }
+        },
+    )
+    assert not evaluate(
+        _condition("review"), {"needs": {"fix": {"outputs": {"pull_request": ""}}}}
+    )
+
+
+def test_a_failed_review_does_not_fail_the_run_or_comment_on_the_issue() -> None:
+    assert re.search(r"(?m)^    continue-on-error: true$", _job("review"))
+    assert "review" not in re.search(r"needs: \[([^\]]*)\]", _job("notify")).group(1)  # type: ignore[union-attr]
+
+
+def test_the_review_checks_out_nothing_and_never_runs_the_pull_requests_code() -> None:
+    job = _job("review")
+    assert "checkout" not in job
+    assert "run: |" in job and "pull_request_number" in job
+    for banned in ("pull_request_target", "head.ref", "head_ref"):
+        assert banned not in job
+
+
+def test_the_review_calls_this_repositorys_review_action_with_the_number() -> None:
+    job = _job("review")
+    assert "uses: menil/pr-code-review-action@v1" in job
+    assert "pull_request_number: ${{ steps.pr.outputs.number }}" in job
+    assert "claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in job
+
+
+def test_every_input_the_review_step_passes_is_one_the_review_action_declares() -> None:
+    action = (ROOT / "action.yml").read_text(encoding="utf-8")
+    step = _job("review").split("pr-code-review-action@v1", 1)[1]
+    passed = set(re.findall(r"(?m)^          (\w+):", step))
+    assert passed and passed <= _declared_inputs(action), passed - _declared_inputs(
+        action
+    )
+
+
+def _number_step() -> str:
+    match = re.search(
+        r"(?ms)id: pr\n.*?run: \|\n(.*?)(?=\n      - name:)", _job("review")
+    )
+    assert match
+    return "\n".join(line[10:] for line in match.group(1).splitlines())
+
+
+@pytest.mark.parametrize(
+    ("url", "number"),
+    [
+        ("https://github.com/menil/pdf-vdiff/pull/75", "75"),
+        ("https://github.com/o/r.with-dots_and-dashes/pull/1", "1"),
+    ],
+)
+def test_the_number_is_read_from_the_pull_request_url(
+    tmp_path: Path, url: str, number: str
+) -> None:
+    done, found = _run_number_step(tmp_path, url)
+    assert done.returncode == 0, done.stderr
+    assert found == f"number={number}\n"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "https://github.com/o/r/pull/",
+        "https://github.com/o/r/pull/7/files",
+        "https://github.com/o/r/issues/7",
+        "https://evil.example/o/r/pull/7",
+        "http://github.com/o/r/pull/7",
+        "https://github.com/o/r/pull/7; touch pwned",
+        "https://github.com/o/r/pull/7\nnumber=8",
+        "https://github.com/o/r/pull/$(id)",
+    ],
+)
+def test_anything_else_stops_the_review_and_writes_no_number(
+    tmp_path: Path, url: str
+) -> None:
+    done, found = _run_number_step(tmp_path, url)
+    assert done.returncode != 0
+    assert found == ""
+    assert not (tmp_path / "pwned").exists()
+
+
+def _run_number_step(
+    tmp_path: Path, url: str
+) -> tuple["subprocess.CompletedProcess[str]", str]:
+    out = tmp_path / "out"
+    out.write_text("")
+    done = subprocess.run(
+        ["bash", "-c", _number_step()],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "URL": url, "GITHUB_OUTPUT": str(out)},
+        capture_output=True,
+        text=True,
+    )
+    return done, out.read_text()

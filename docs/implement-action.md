@@ -147,8 +147,20 @@ with `GITHUB_TOKEN`. Two consequences, both measured in the spike:
   repository; enabling the workflow in a repository includes it.
 - The pull request is authored by `github-actions`, and `validate` and the review
   actions are created on it but held at `action_required` with no jobs, until a person
-  clicks "Approve and run". They do not run on their own. Merging needs them, so this is
-  one extra click per agent pull request, on top of the review a person does anyway.
+  clicks "Approve and run". They do not run on their own. Merging needs `validate`, so
+  this is one extra click per agent pull request, on top of the review a person does
+  anyway.
+- The review need not wait for that click. GitHub does let a workflow's own token start a
+  `workflow_dispatch`, but the review needs only a pull request number and a repository,
+  so the implementation workflow runs it itself in a `review` job after `fix`, on the
+  number taken from the URL the fix reports (only the exact form of a pull request URL is
+  accepted). That job has `pull-requests: write` and `contents: read`, checks nothing out
+  and reads only the diff, which the review action already treats as untrusted. It is
+  `continue-on-error`, and the failure comment does not wait for it, so a review problem
+  cannot mark the implementation as failed. The repository's own `pr-review.yml` should skip
+  `agent/issue-*` branches opened from the same repository, or the click produces a second
+  review. `validate` cannot move into the workflow the same way: it has to run the pull
+  request's own code, which is what the held run is protecting.
 
 Not tried, on purpose: a fine-grained token in a secret (no new credential is wanted),
 and the Claude GitHub App, which would author the pull request as `claude[bot]` and
