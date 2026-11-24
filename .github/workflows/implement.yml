@@ -1,0 +1,263 @@
+# The implementation workflow, called from a repository's own small workflow (see
+# implement/example-workflow.yml and "Issue implementation" in the README). It holds every
+# job, the guard that decides who may start a run, and what each job may touch, so a repository
+# does not copy them and a change to them reaches it by changing one version, not by editing
+# its own file.
+#
+# What it does: for an issue by someone with write access (when agent_auto is 'true'), or an
+# issue a maintainer labels ready-to-implement, a model assesses whether it is real and
+# reproducible; if so, another run writes a fix and opens a pull request, ready for review. A
+# person reviews and merges it. The model never merges, approves or labels.
+#
+# Every `uses: menil/pr-code-review-action...@vX.Y.Z` below names the release this file ships
+# in, because a file cannot name its own commit. A release is one that has its tag locked
+# ("immutable releases"), which makes the tag as fixed as a commit. The version is changed in
+# one place, by scripts/pin_implement_actions.py, in the pull request that is released; a test
+# checks the pins agree.
+name: Implement issue (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      assess_command_tools:
+        description: >-
+          The commands the model may run to reproduce a problem, as Claude Code tool
+          patterns, comma-separated. Nothing else is allowed apart from reading files.
+        type: string
+        required: true
+      fix_command_tools:
+        description: >-
+          The commands the model may run while fixing: the tests, and whatever builds and
+          checks. A pattern that would give it a shell, the network, git or the environment
+          is refused.
+        type: string
+        required: true
+      repository_notes:
+        description: What a newcomer needs to know about this repository (how to run the tests).
+        type: string
+        default: ''
+      fix_repository_notes:
+        description: Notes for the fix stage only; the repository_notes are used if this is empty.
+        type: string
+        default: ''
+      agent_auto:
+        description: >-
+          Pass the repository variable AGENT_AUTO. Only the exact value 'true' lets an issue
+          opened by an owner, member or collaborator start a run on its own.
+        type: string
+        default: ''
+      daily_cap:
+        description: >-
+          Pass the repository variable AGENT_DAILY_CAP: the most assessments in 24 hours.
+          Empty means 5; 0 pauses everything. A soft limit.
+        type: string
+        default: ''
+      fix_max_turns:
+        description: Most back-and-forth exchanges the fix stage may take.
+        type: string
+        default: '40'
+      draft:
+        description: Open the pull request as a draft. The default is ready for review.
+        type: boolean
+        default: false
+      install_nix:
+        description: Install Nix first, for a repository whose tests run in a Nix shell.
+        type: boolean
+        default: false
+      nix_path:
+        description: The NIX_PATH to set when install_nix is on.
+        type: string
+        default: nixpkgs=channel:nixos-unstable
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: The Claude subscription token. Only the model steps see it.
+        required: true
+      OPENROUTER_API_KEY:
+        description: Optional. Lets the review fall back to OpenRouter if Claude fails.
+        required: false
+
+# Nothing by default: each job asks for exactly what it needs, and none asks for `workflows`.
+# The calling job must grant at least what the jobs below ask for between them.
+permissions: {}
+
+jobs:
+  assess:
+    # Decided before any model runs, from the event alone. A run starts only for:
+    #  - an issue just opened by an owner, member or collaborator, and only if agent_auto is
+    #    'true'; or
+    #  - the ready-to-implement label, applied by someone the action then checks has write
+    #    access (a stranger's issue only ever runs because a maintainer chose it).
+    # Never for a bot, an issue labelled no-agent, or one that has been assessed already.
+    if: >-
+      github.event.issue.user.type != 'Bot'
+      && !contains(github.event.issue.labels.*.name, 'no-agent')
+      && !contains(join(github.event.issue.labels.*.name, ','), 'repro:')
+      && (
+        (github.event.action == 'opened'
+          && inputs.agent_auto == 'true'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+        || (github.event.action == 'labeled'
+          && github.event.label.name == 'ready-to-implement')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      verdict: ${{ steps.assess.outputs.verdict }}
+      capped: ${{ steps.assess.outputs.capped }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        if: inputs.install_nix
+        uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        with:
+          nix_path: ${{ inputs.nix_path }}
+
+      - name: Assess the issue
+        id: assess
+        uses: menil/pr-code-review-action/implement/assess@v1.7.0
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          issue_number: ${{ github.event.issue.number }}
+          # Only when a label started the run: that person must have write access.
+          actor_login: ${{ github.event.action == 'labeled' && github.event.sender.login || '' }}
+          daily_cap: ${{ inputs.daily_cap }}
+          command_tools: ${{ inputs.assess_command_tools }}
+          repository_notes: ${{ inputs.repository_notes }}
+
+  report:
+    needs: assess
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    outputs:
+      proceed: ${{ steps.report.outputs.proceed }}
+    steps:
+      - name: Write the assessment
+        id: report
+        if: needs.assess.outputs.capped != 'true'
+        uses: menil/pr-code-review-action/implement/report@v1.7.0
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          verdict: ${{ needs.assess.outputs.verdict }}
+
+      - name: Say the daily limit was reached
+        if: needs.assess.outputs.capped == 'true'
+        uses: menil/pr-code-review-action/implement/notify@v1.7.0
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          kind: capped
+          daily_cap: ${{ inputs.daily_cap }}
+
+  fix:
+    needs: [assess, report]
+    if: needs.report.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    outputs:
+      pull_request: ${{ steps.fix.outputs.pull_request_url }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        if: inputs.install_nix
+        uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        with:
+          nix_path: ${{ inputs.nix_path }}
+
+      - name: Fix the issue and open a pull request
+        id: fix
+        uses: menil/pr-code-review-action/implement/fix@v1.7.0
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          issue_number: ${{ github.event.issue.number }}
+          actor_login: ${{ github.event.action == 'labeled' && github.event.sender.login || '' }}
+          command_tools: ${{ inputs.fix_command_tools }}
+          max_turns: ${{ inputs.fix_max_turns }}
+          draft: ${{ inputs.draft }}
+          repository_notes: ${{ inputs.fix_repository_notes || inputs.repository_notes }}
+
+  # Reviews the pull request the fix opened. A pull request opened with the workflow's
+  # own token does not start your repository's review workflow until a person clicks
+  # "Approve and run", so the review is run from here, on the number of that pull request.
+  # It reads the diff only: nothing from the pull request is checked out or run. A failed
+  # review does not fail this run. If your review workflow also triggers on pull requests,
+  # have it skip branches named agent/issue-*, or the click will produce a second review.
+  review:
+    needs: fix
+    if: needs.fix.outputs.pull_request != ''
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Find the pull request number
+        id: pr
+        env:
+          URL: ${{ needs.fix.outputs.pull_request }}
+        run: |
+          set -euo pipefail
+          # Only the exact form of a pull request URL; anything else stops here.
+          if [[ "$URL" =~ ^https://github\.com/[^/]+/[^/]+/pull/([0-9]+)$ ]]; then
+            echo "number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::The fix did not report a pull request URL."
+            exit 1
+          fi
+
+      - name: Review the pull request
+        uses: menil/pr-code-review-action@v1.7.0
+        with:
+          provider: auto
+          pull_request_number: ${{ steps.pr.outputs.number }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+
+  # Tidies the issue once the pull request is open: takes off ready-to-implement, puts on
+  # pr-open and leaves one comment with the link. Fixed labels and text, no model, and only
+  # the permission to write to issues. A failure here does not fail the run.
+  finish:
+    needs: fix
+    if: needs.fix.outputs.pull_request != ''
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Tidy the issue
+        uses: menil/pr-code-review-action/implement/finish@v1.7.0
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          pull_request_url: ${{ needs.fix.outputs.pull_request }}
+
+  # One comment, once per issue, if any stage above failed, so a failure is not silent.
+  notify:
+    needs: [assess, report, fix]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Say the run failed
+        uses: menil/pr-code-review-action/implement/notify@v1.7.0
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          kind: failed

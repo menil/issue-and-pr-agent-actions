@@ -1,7 +1,9 @@
-"""The template workflow decides who may spend a run and what each job may touch.
+"""The implementation workflow decides who may spend a run and what each job may touch.
 
-Its `if:` guards are run through an evaluator against a table of events, so they are
-tested by what they decide; its permissions and wiring are read as text."""
+It is the reusable workflow in .github/workflows/implement.yml, which a repository calls from
+a small workflow of its own (tests/test_implement_caller.py). Its `if:` guards are run through
+an evaluator against a table of events, so they are tested by what they decide; its
+permissions and wiring are read as text."""
 
 import re
 import subprocess
@@ -13,7 +15,7 @@ from gha_expr import evaluate
 from test_action_yml import _declared_inputs
 
 ROOT = Path(__file__).resolve().parent.parent
-TEXT = (ROOT / "implement" / "example-workflow.yml").read_text(encoding="utf-8")
+TEXT = (ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
 JOBS = ("assess", "report", "fix", "notify", "finish")
 
 
@@ -81,7 +83,8 @@ def _event(
 def _runs(event: dict[str, Any], agent_auto: str | None = "true") -> bool:
     context = {
         "github": {"event": event},
-        "vars": {} if agent_auto is None else {"AGENT_AUTO": agent_auto},
+        # The caller passes the repository variable as an input.
+        "inputs": {"agent_auto": "" if agent_auto is None else agent_auto},
     }
     return bool(evaluate(_condition("assess"), context))
 
@@ -224,9 +227,16 @@ def test_no_job_can_touch_workflows_or_mint_tokens() -> None:
 
 
 def test_only_the_jobs_that_run_the_model_see_the_claude_token() -> None:
-    assert set(re.findall(r"secrets\.(\w+)", TEXT)) == {"CLAUDE_CODE_OAUTH_TOKEN"}
+    assert set(re.findall(r"secrets\.(\w+)", TEXT)) == {
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENROUTER_API_KEY",
+    }
     assert "secrets." in _job("assess") and "secrets." in _job("fix")
     assert "secrets." in _job("review")  # the review is a model run too
+    # The fallback key reaches the review step and nothing else.
+    assert "OPENROUTER_API_KEY" in _job("review")
+    for name in ("assess", "report", "fix", "finish", "notify"):
+        assert "OPENROUTER_API_KEY" not in _job(name), name
     assert "secrets." not in _job("report")
     assert "secrets." not in _job("notify")
 
@@ -249,29 +259,42 @@ def test_the_jobs_run_in_order_and_the_fix_needs_both() -> None:
     assert re.search(r"needs: \[assess, report, fix\]", _job("notify"))
 
 
-def test_one_run_per_issue_and_none_is_cancelled_halfway() -> None:
-    assert "group: implement-issue-${{ github.event.issue.number }}" in TEXT
-    assert "cancel-in-progress: false" in TEXT
-
-
-def test_only_new_and_labelled_issues_are_events_it_listens_to() -> None:
-    assert re.search(r"(?m)^on:\n  issues:\n    types: \[opened, labeled\]\n", TEXT)
+def test_it_is_only_ever_called_never_started_by_an_event_of_its_own() -> None:
     code = re.sub(r"#.*", "", TEXT)
-    # The `on:` block, up to the next top-level key. Asserting it holds the issues trigger
+    # The `on:` block, up to the next top-level key. Asserting it holds the call trigger
     # keeps a layout change from leaving the check looking at the wrong text.
     block = re.search(r"(?ms)^on:\n(.*?)(?=^\S)", code)
-    assert block and "issues:" in block.group(1)
-    events = block.group(1)
-    for banned in (
-        "pull_request",
-        "issue_comment",
-        "workflow_run",
-        "workflow_dispatch",
-        "schedule",
-    ):
-        assert banned not in events
+    assert block and "workflow_call:" in block.group(1)
+    events = re.findall(r"(?m)^  (\w+):", block.group(1))
+    assert events == ["workflow_call"]
     # A pull request's own code or branch must never be what the workflow runs on.
     assert "pull_request_target" not in code
+    assert "workflow_run" not in code
+
+
+def test_no_expression_is_ever_put_into_a_shell_script() -> None:
+    """The caller's inputs go to the actions' `with:`, never into `run:`: an input holds
+    free text (the notes, the commands), and in a script it would be code. What a script
+    needs reaches it through `env:`."""
+    bodies = re.findall(r"(?ms)^ +run: \|\n(.*?)(?=^ +- name:|^  \w+:|\Z)", TEXT)
+    assert bodies, "the workflow has no script to check"
+    for body in bodies:
+        assert "${{" not in body
+
+
+def test_the_repository_variables_arrive_as_inputs_not_as_vars() -> None:
+    assert "vars." not in re.sub(r"#.*", "", TEXT)
+    assert "inputs.agent_auto == 'true'" in _condition("assess")
+
+
+def test_every_action_it_calls_is_pinned_to_one_exact_release() -> None:
+    """A file cannot name its own commit, so the actions inside are named by the release
+    tag this file ships in, and a release's tag is locked. They must all agree, or one stage
+    would run another release's code."""
+    refs = set(re.findall(r"uses: menil/pr-code-review-action[\w/]*@(\S+)", TEXT))
+    assert len(refs) == 1, refs
+    (ref,) = refs
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", ref), ref
 
 
 def test_nothing_the_issue_author_wrote_is_used_in_an_expression() -> None:
@@ -318,16 +341,6 @@ def test_the_inputs_it_passes_exist_and_the_required_ones_are_all_there(
 @pytest.mark.parametrize("name", JOBS)
 def test_it_calls_this_repositorys_action_for_each_job(name: str) -> None:
     assert f"uses: menil/pr-code-review-action/implement/{name}@" in _job(name)
-
-
-def test_the_commands_in_the_example_pass_the_check_they_will_meet() -> None:
-    """The example is what people copy; it must not be refused by the first thing it meets."""
-    import implement
-
-    tools = re.findall(r"command_tools: '([^']*)'", TEXT)
-    assert len(tools) == 2
-    for value in tools:
-        assert implement.check_command_tools(value) == [], value
 
 
 # --- the daily limit and the failure comment ---
@@ -406,8 +419,8 @@ def test_a_failed_stage_is_reported_and_nothing_else_is(
     assert bool(evaluate(_condition("notify"), context)) is says
 
 
-def test_the_limit_comes_from_a_repository_variable_in_both_places_it_is_used() -> None:
-    assert TEXT.count("daily_cap: ${{ vars.AGENT_DAILY_CAP }}") == 2
+def test_the_limit_comes_from_the_daily_cap_input_in_both_places_it_is_used() -> None:
+    assert TEXT.count("daily_cap: ${{ inputs.daily_cap }}") == 2
 
 
 def test_the_two_notices_ask_for_the_two_kinds() -> None:
@@ -579,3 +592,26 @@ def test_the_tidy_job_gets_no_secret_and_only_the_issue_write_permission() -> No
     assert _permissions(job) == {"issues": "write"}
     assert "pull_request_url: ${{ needs.fix.outputs.pull_request }}" in job
     assert "issue_number: ${{ github.event.issue.number }}" in job
+
+
+def test_each_secret_goes_only_to_the_input_made_for_it() -> None:
+    """A secret handed to the wrong input could end up somewhere that logs it or sends it on."""
+    expected = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "claude_code_oauth_token",
+        "OPENROUTER_API_KEY": "openrouter_api_key",
+    }
+    lines = re.findall(r"(?m)^\s+(\w+): \$\{\{ secrets\.(\w+) \}\}\s*$", TEXT)
+    assert lines, "no secret is passed to anything"
+    for target, secret in lines:
+        assert expected[secret] == target, (secret, target)
+    # And none is used in some other shape (inside a larger expression, say).
+    assert len(lines) == len(re.findall(r"secrets\.\w+", TEXT))
+
+
+def test_every_third_party_action_is_pinned_to_a_full_commit() -> None:
+    """Only this repository's actions (named by release) and GitHub's own may be named by a
+    tag; anything else that is handed the job's token or the checkout is pinned by commit."""
+    for owner_repo, ref in re.findall(r"(?m)^\s+(?:- )?uses: ([\w./-]+)@(\S+)", TEXT):
+        if owner_repo.startswith(("menil/pr-code-review-action", "actions/")):
+            continue
+        assert re.fullmatch(r"[0-9a-f]{40}", ref), (owner_repo, ref)

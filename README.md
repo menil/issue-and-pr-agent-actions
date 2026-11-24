@@ -191,7 +191,7 @@ What it does and does not do:
 > [!NOTE]
 > Available from `v1.3.0`. A workflow pinned to `@v1.2.0` or earlier does not have it.
 
-More actions under `implement/` take an issue from "reported" to a **pull request**, ready for a person to review. They are used from one workflow, [`implement/example-workflow.yml`](implement/example-workflow.yml), copied into the repository. The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
+More actions under `implement/` take an issue from "reported" to a **pull request**, ready for a person to review. They run from one shared workflow, [`.github/workflows/implement.yml`](.github/workflows/implement.yml), which a repository calls from a short workflow of its own, [`implement/example-workflow.yml`](implement/example-workflow.yml). The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
 
 1. **`implement/assess`** reads the issue and runs a model with read-only tools to decide whether it is real, whether it reproduces and how large the fix would be. It returns a verdict.
 2. **`implement/report`** (no model) checks the verdict against a fixed contract, adds `repro:*` and `effort:*` labels from a fixed table, posts one comment, and says whether to go on. It goes on only if the issue is valid, not large, and either reproduced, confirmed by reading the code (`repro:by-reading`), or a change request.
@@ -210,7 +210,15 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 ### Setting it up
 
-1. Copy `implement/example-workflow.yml` to `.github/workflows/implement-issue.yml` and edit the three places marked `EDIT`: the release tag, the commands the model may run, and a few notes about the repository. The commands are the only things the model can run besides reading files, so name the narrowest ones that work, for example `Bash(cargo test:*)`. A pattern that would give it a shell, the network, git, the environment or a way to read any file (`Bash(bash:*)`, `Bash(curl:*)`, `Bash(cat:*)`, a bare `Bash(python3:*)`) is refused before any model runs.
+1. Copy `implement/example-workflow.yml` to `.github/workflows/implement-issue.yml` and edit the places marked `EDIT`. It is short: your triggers, one job that calls the shared workflow in this repository (`.github/workflows/implement.yml`, which holds every job, the check on who may start a run and what each job may touch), and your own settings: the commands the model may run and a few notes about the repository. The commands are the only things the model can run besides reading files, so name the narrowest ones that work, for example `Bash(cargo test:*)`. A pattern that would give it a shell, the network, git, the environment or a way to read any file (`Bash(bash:*)`, `Bash(curl:*)`, `Bash(cat:*)`, a bare `Bash(python3:*)`) is refused before any model runs. If the tests need a Nix shell, set `install_nix: true`.
+
+   Pin the `uses:` line to the full commit of a release, with the release in a comment, as for any workflow that is handed a token:
+
+   ```yaml
+   uses: menil/pr-code-review-action/.github/workflows/implement.yml@<full commit sha> # v1.8.0
+   ```
+
+   That line is all that changes when this repository does: the jobs, the permissions and the guards come with the version. Dependabot's `github-actions` updates bump the line in a pull request, so you do not have to; see [docs/implement-action.md](docs/implement-action.md#a-reusable-workflow) for what that relies on.
 2. Add the `CLAUDE_CODE_OAUTH_TOKEN` secret (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`). Only the two jobs that run a model get it.
 3. Once per repository, with an admin login, from inside the repository: turn on the setting that lets workflows open pull requests, and create the two labels a person applies. The actions create every other label themselves, but the label picker only offers labels that exist.
 
@@ -232,7 +240,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 ### What to expect
 
-- **One click per pull request, for `validate`.** A pull request opened with the workflow's own token does not start your repository's workflows on its own: GitHub creates the runs and holds them until a person clicks "Approve and run". That is the price of not putting a personal access token in a secret. The **review** does not wait for the click: the example workflow's `review` job runs it on the new pull request straight away, reading only its diff. A failed review does not fail the run. Because the click would also start your own `pr-review.yml`, make that one skip these branches, or the pull request gets two reviews: add `&& !(startsWith(github.head_ref, 'agent/issue-') && github.event.pull_request.head.repo.full_name == github.repository)` to its job's `if:`. The repository check keeps a fork from skipping its own review by naming a branch like that.
+- **One click per pull request, for `validate`.** A pull request opened with the workflow's own token does not start your repository's workflows on its own: GitHub creates the runs and holds them until a person clicks "Approve and run". That is the price of not putting a personal access token in a secret. The **review** does not wait for the click: the shared workflow's `review` job runs it on the new pull request straight away, reading only its diff. A failed review does not fail the run. Because the click would also start your own `pr-review.yml`, make that one skip these branches, or the pull request gets two reviews: add `&& !(startsWith(github.head_ref, 'agent/issue-') && github.event.pull_request.head.repo.full_name == github.repository)` to its job's `if:`. The repository check keeps a fork from skipping its own review by naming a branch like that.
 - **The model is a risk even so.** It reads text an outsider may have written, with your Claude token in the job's environment and a test command it can edit and run. Write the allowed commands narrowly, keep `AGENT_AUTO` off in a repository with strangers' issues, and read the design document's section on what could still go wrong.
 - **A failed run says so, once.** If any stage fails, the issue gets one comment with a link to the log, and no pull request. It is not repeated for the same issue.
 - **It uses your subscription,** not an API key. One small issue took about 15 seconds of model time across the two stages in a trial; heavy use is unmeasured.
