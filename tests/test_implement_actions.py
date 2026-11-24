@@ -151,7 +151,10 @@ def test_the_repositorys_own_commands_come_in_as_an_input(name: str) -> None:
 def test_inputs_that_end_up_in_quotes_are_checked_first(name: str) -> None:
     check = next(body for body in _run_bodies(name) if "MAX_TURNS" in body)
     assert "[0-9]+" in check
-    assert '"' in check and "TOOLS" in check  # a double quote in the tools would end it
+    assert 'python "$IMPLEMENT" check-tools' in check
+    text = TEXT[name]
+    assert text.index("check-tools") < text.index("implement.py fetch")
+    assert text.index("check-tools") < text.index(f"uses: {MODEL_ACTION}")
 
 
 @MODEL_STAGES

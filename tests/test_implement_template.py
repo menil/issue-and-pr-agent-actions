@@ -299,3 +299,13 @@ def test_the_inputs_it_passes_exist_and_the_required_ones_are_all_there(
 @pytest.mark.parametrize("name", JOBS)
 def test_it_calls_this_repositorys_action_for_each_job(name: str) -> None:
     assert f"uses: menil/pr-code-review-action/implement/{name}@" in _job(name)
+
+
+def test_the_commands_in_the_example_pass_the_check_they_will_meet() -> None:
+    """The example is what people copy; it must not be refused by the first thing it meets."""
+    import implement
+
+    tools = re.findall(r"command_tools: '([^']*)'", TEXT)
+    assert len(tools) == 2
+    for value in tools:
+        assert implement.check_command_tools(value) == [], value

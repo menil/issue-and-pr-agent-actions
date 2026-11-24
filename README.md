@@ -206,7 +206,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 ### Setting it up
 
-1. Copy `implement/example-workflow.yml` to `.github/workflows/implement-issue.yml` and edit the three places marked `EDIT`: the release tag, the commands the model may run, and a few notes about the repository. The commands are the only things the model can run besides reading files, so name the narrowest ones that work, for example `Bash(cargo test:*)`.
+1. Copy `implement/example-workflow.yml` to `.github/workflows/implement-issue.yml` and edit the three places marked `EDIT`: the release tag, the commands the model may run, and a few notes about the repository. The commands are the only things the model can run besides reading files, so name the narrowest ones that work, for example `Bash(cargo test:*)`. A pattern that would give it a shell, the network, git, the environment or a way to read any file (`Bash(bash:*)`, `Bash(curl:*)`, `Bash(cat:*)`, a bare `Bash(python3:*)`) is refused before any model runs.
 2. Add the `CLAUDE_CODE_OAUTH_TOKEN` secret (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`). Only the two jobs that run a model get it.
 3. Turn on **Settings, Actions, General, "Allow GitHub Actions to create and approve pull requests"**. It is off by default and a workflow cannot turn it on. Without it the branch is pushed but the pull request is refused, and the job says so.
 4. Optionally set `AGENT_AUTO` (`gh variable set AGENT_AUTO --body true`) so that your own new issues are worked on automatically.
