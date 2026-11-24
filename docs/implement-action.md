@@ -48,7 +48,7 @@ from its documentation:
 ## Flow
 
 1. **Guards (no model).** Skip if the issue is from a bot, carries `no-agent`, or
-   already has a `repro:*` label or an open `agent/issue-N` branch or PR; skip a
+   already has a `repro:*` label or an open `agent/issue-N` (or `agent/issue-N-*`) branch or PR; skip a
    second run for the same issue (concurrency group per issue number).
    Opened by a trusted author and `AGENT_AUTO` is on, or `ready-to-implement` was
    applied by a person with write access: continue. Otherwise stop.
@@ -138,7 +138,7 @@ data.
 
 ## Opening the pull request
 
-With Route A the wrapper pushes `agent/issue-N` and opens a pull request itself,
+With Route A the wrapper pushes `agent/issue-N-<words>` and opens a pull request itself,
 with `GITHUB_TOKEN`. Two consequences, both measured in the spike:
 
 - The repository setting "Allow GitHub Actions to create and approve pull requests"
@@ -188,6 +188,14 @@ commit message and the pull request text itself.
 - **If the file is wrong:** a missing file, a bad type, a missing title or description, or
   text that cannot be made safe all fall back to the generic text, with a log line that
   does not repeat what the model wrote. A wording problem never costs the fix.
+- **The branch name** is `agent/issue-N`, then up to 40 characters of the title as lowercase
+  words joined by hyphens, cut at a word (`agent/issue-63-report-encrypted-pdfs`). The slug is
+  built by code from the cleaned title: only `a-z`, `0-9` and single hyphens can come out, so
+  it is safe in a ref name and in a shell word, and a title with none leaves the plain
+  `agent/issue-N`. The script checks the name again before using it. The start never changes,
+  because repositories skip and look for branches that begin with `agent/issue-`. Since the
+  words can differ between runs, the "branch already exists" check looks for `agent/issue-N`
+  and `agent/issue-N-*`, so an earlier attempt under any name still blocks a retry.
 - **The file is never committed.** `fetch` lists it in `.git/info/exclude` before the model
   starts, the changed-file check treats the name as protected, and a run whose only change
   is that file still counts as no change.

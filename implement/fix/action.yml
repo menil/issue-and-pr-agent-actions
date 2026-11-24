@@ -1,5 +1,5 @@
 name: 'AI Issue Implementation: fix'
-description: 'Lets the model edit files to fix an assessed issue, then refuses any change that must not be committed, commits, pushes agent/issue-N and opens a pull request. Third stage of the implementation action (docs/implement-action.md).'
+description: 'Lets the model edit files to fix an assessed issue, then refuses any change that must not be committed, commits, pushes agent/issue-N-<words> and opens a pull request. Third stage of the implementation action (docs/implement-action.md).'
 author: 'meni'
 branding:
   icon: 'git-pull-request'
@@ -131,15 +131,22 @@ runs:
         texts="$(mktemp -d)"
         python "$IMPLEMENT" describe "$texts" "$NUMBER"
 
-        branch="agent/issue-${NUMBER}"
+        # The name is `agent/issue-N`, then words from the change's title. It is checked
+        # again here, because it ends up in a git command: it must be this issue's, and only
+        # lowercase letters, digits and single hyphens may follow the number.
+        branch="$(cat "$texts/branch.txt")"
+        [[ "$branch" =~ ^agent/issue-[0-9]+(-[a-z0-9]+)*$ ]] || { echo "::error::Not a branch name."; exit 1; }
+        [[ "$branch" == "agent/issue-${NUMBER}" || "$branch" == "agent/issue-${NUMBER}-"* ]] || { echo "::error::The branch is not this issue's."; exit 1; }
         remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 
         # Never add to a branch that is already there: a push to one would fast-forward it.
+        # The words in the name can differ from one run to the next, so an earlier attempt
+        # under any name for this issue counts, or a retry would open a second pull request.
         status=0
-        git ls-remote --exit-code --heads "$remote" "$branch" > /dev/null 2>&1 || status=$?
+        git ls-remote --exit-code --heads "$remote" "refs/heads/agent/issue-${NUMBER}" "refs/heads/agent/issue-${NUMBER}-*" > /dev/null 2>&1 || status=$?
         case "$status" in
           2) ;;
-          0) echo "::error::The branch $branch already exists; nothing was pushed."; exit 1 ;;
+          0) echo "::error::A branch for this issue already exists (agent/issue-${NUMBER} or agent/issue-${NUMBER}-...); nothing was pushed."; exit 1 ;;
           *) echo "::error::Could not look for the branch $branch; nothing was pushed."; exit 1 ;;
         esac
 

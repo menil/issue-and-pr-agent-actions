@@ -240,6 +240,8 @@ def test_a_failed_run_gets_one_comment_with_a_link_to_it(
     # comment must say what actually has to be undone first.
     assert "repro:" in body and "assessment comment" in body
     assert "`agent/issue-17`" in body and "`ready-to-implement`" in body
+    # The branch name may carry words after the number.
+    assert "`agent/issue-17-*`" in body
 
 
 def test_a_failed_run_is_not_reported_twice(
