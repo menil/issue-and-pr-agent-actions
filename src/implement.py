@@ -51,8 +51,11 @@ MAX_BODY_CHARS = 6000
 MAX_EVIDENCE_CHARS = 1500
 MAX_SUMMARY_CHARS = 600
 
+# A claim of having run the problem, or of having read the fault, needs something to
+# point at; without it the honest word is not_attempted.
+CLAIMS_NEEDING_EVIDENCE = ("yes", "by_reading")
 VALID_VALUES = ("yes", "no", "unclear")
-REPRODUCED_VALUES = ("yes", "no", "not_applicable", "not_attempted")
+REPRODUCED_VALUES = ("yes", "by_reading", "no", "not_applicable", "not_attempted")
 EFFORT_VALUES = ("small", "medium", "large")
 
 # The only labels this code ever writes, with the colour and description they are created
@@ -62,6 +65,10 @@ LABEL_STYLE = {
     "repro:confirmed": ("0e8a16", "The assessment reproduced this issue"),
     "repro:failed": ("d93f0b", "The assessment could not reproduce this issue"),
     "repro:not-applicable": ("c5def5", "Reproduction does not apply to this issue"),
+    "repro:by-reading": (
+        "fbca04",
+        "The assessment confirmed this issue by reading the code, without running it",
+    ),
     "effort:small": ("c2e0c6", "Assessed as a small change"),
     "effort:medium": ("fef2c0", "Assessed as a medium-sized change"),
     "effort:large": ("f9d0c4", "Assessed as a large change"),
@@ -71,6 +78,7 @@ REPRO_LABELS = {
     "yes": "repro:confirmed",
     "no": "repro:failed",
     "not_applicable": "repro:not-applicable",
+    "by_reading": "repro:by-reading",
 }
 
 # Hidden in the comment: once it is there the issue has been assessed, so a second run
@@ -284,8 +292,8 @@ def parse_verdict(raw: str) -> Verdict:
 
     The three enumerated fields must be exactly one of their values. The two texts are
     made into strings, stripped of invisible characters and cut to length; the model
-    cannot add other fields. A claim to have reproduced the problem needs evidence: with
-    none, it is not believed.
+    cannot add other fields. A claim to have run the problem, or to have read the fault in
+    the code, needs evidence to point at: with none, it is not believed.
     """
     data = json.loads(raw)
     if not isinstance(data, dict):
@@ -295,17 +303,19 @@ def parse_verdict(raw: str) -> Verdict:
     effort = _enum(data, "effort", EFFORT_VALUES)
     evidence = _text(data.get("evidence"), MAX_EVIDENCE_CHARS)
     summary = _text(data.get("summary"), MAX_SUMMARY_CHARS)
-    if reproduced == "yes" and not evidence:
+    if reproduced in CLAIMS_NEEDING_EVIDENCE and not evidence:
         reproduced = "not_attempted"
     return Verdict(valid, reproduced, effort, evidence, summary)
 
 
 def gate(verdict: Verdict) -> bool:
-    """Whether the next stage may write a fix: valid, reproduced (or not applicable)
-    and not large. Anything else is for a person to decide."""
+    """Whether the next stage may write a fix: valid, not large, and the problem shown by
+    running it, confirmed by reading the code, or not something that can be reproduced.
+    Anything else is for a person to decide. A reading is weaker than a run, which is why
+    the fix stage has to show the problem with a failing test before it changes anything."""
     return (
         verdict.valid == "yes"
-        and verdict.reproduced in ("yes", "not_applicable")
+        and verdict.reproduced in ("yes", "by_reading", "not_applicable")
         and verdict.effort != "large"
     )
 

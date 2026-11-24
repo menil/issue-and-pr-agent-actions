@@ -62,10 +62,11 @@ from its documentation:
    model). Anything outside the contract is dropped. The script, not the model,
    applies the labels and posts one comment (sanitized with `src/sanitize.py`, like
    every model-written comment in this repo). Its job output is the gate result.
-4. **Gate.** Implement only if `valid` is `yes`, `reproduced` is `yes` (a bug) or
-   `not_applicable` (a feature or change request), and `effort` is not `large`. Any
-   other outcome stops with the comment, for the maintainer to decide. A failed
-   reproduction says "could not reproduce"; it never closes or rejects the issue.
+4. **Gate.** Implement only if `valid` is `yes`, `reproduced` is `yes` (a bug that was
+   run), `by_reading` (a bug confirmed in the code but not run) or `not_applicable` (a
+   feature or change request), and `effort` is not `large`. Any other outcome stops with
+   the comment, for the maintainer to decide. A failed reproduction says "could not
+   reproduce"; it never closes or rejects the issue.
 5. **Fix** (job `fix`). Permissions: `contents: write`, `pull-requests: write`,
    `issues: read` (it only reads the issue; labels and the comment are the `report`
    job's, so no write access to issues is needed here), **not** `workflows`. The model edits files and runs the test
@@ -82,19 +83,29 @@ the repository, and may run only what the instruction file allows.
 | Field | Values | Meaning |
 |---|---|---|
 | `valid` | `yes`, `no`, `unclear` | A real defect or a coherent, in-scope request. "Worth doing" is not judged; for an issue by the maintainer, wanting it is the answer. |
-| `reproduced` | `yes`, `no`, `not_applicable`, `not_attempted` | `yes` requires `evidence`: the command run and an excerpt of its output, or the failing test. A claim without evidence is treated as `not_attempted`. |
+| `reproduced` | `yes`, `by_reading`, `no`, `not_applicable`, `not_attempted` | `yes` requires `evidence`: the command run and an excerpt of its output, or the failing test. `by_reading` means the fault was found in the source without running anything, and requires `evidence` naming the file and line and what the code does there. A claim of either kind without evidence is treated as `not_attempted`. |
 | `effort` | `small`, `medium`, `large` | Informational, and the only thing that can stop an otherwise good issue from being attempted automatically. |
 | `evidence` | text, at most 1,500 characters | Sanitized before posting. |
 | `summary` | text, at most 600 characters | Sanitized before posting. |
 
 Labels written by the script, from a fixed map: `repro:confirmed`, `repro:failed`,
-`repro:not-applicable`, and `effort:small|medium|large`. `invalid`, `wontfix` and
+`repro:not-applicable`, `repro:by-reading`, and `effort:small|medium|large`. `invalid`, `wontfix` and
 `spam` are never applied; they stay human-only.
 
 Valid and reproduced are the weak judgements. A model will readily call a vague
 report valid, or say it reproduced something it did not. Hence the evidence
 requirement, the `not_attempted` default, and the rule that a negative result only
 informs a person.
+
+`by_reading` exists because the assessor can only read files and run the repository's
+existing tests: it cannot write a new test, so a bug that needs one to show it (the first
+real run, a defect "confirmed by reading the source") would otherwise always stop at the
+gate. It is weaker than `yes`, so the **fix stage must reproduce first**: write a test
+that shows the problem and run it, and see it fail for the reason the issue gives; then
+make the change and see it pass. If it cannot make a test fail, the issue is not what it
+said, and the stage changes nothing, which counts as a failed run. That order is an
+instruction and a review, not something code can check: tests may live inline in the
+source, so no rule about which files changed would be reliable.
 
 ## What may run, and with which credentials
 

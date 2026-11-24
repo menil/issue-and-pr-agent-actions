@@ -193,8 +193,8 @@ What it does and does not do:
 Three more actions under `implement/` take an issue from "reported" to a **draft pull request**, for a person to review. They are used from one workflow, [`implement/example-workflow.yml`](implement/example-workflow.yml), copied into the repository. The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
 
 1. **`implement/assess`** reads the issue and runs a model with read-only tools to decide whether it is real, whether it reproduces and how large the fix would be. It returns a verdict.
-2. **`implement/report`** (no model) checks the verdict against a fixed contract, adds `repro:*` and `effort:*` labels from a fixed table, posts one comment, and says whether to go on. It goes on only if the issue is valid, reproduced (or a change request) and not large.
-3. **`implement/fix`** lets a model edit files and run the repository's tests, then code refuses anything that must not be committed, pushes `agent/issue-N` and opens a **draft** pull request.
+2. **`implement/report`** (no model) checks the verdict against a fixed contract, adds `repro:*` and `effort:*` labels from a fixed table, posts one comment, and says whether to go on. It goes on only if the issue is valid, not large, and either reproduced, confirmed by reading the code (`repro:by-reading`), or a change request.
+3. **`implement/fix`** lets a model write a test that shows the problem, see it fail, fix the code and see it pass (it changes nothing if it cannot make the test fail), then code refuses anything that must not be committed, pushes `agent/issue-N` and opens a **draft** pull request.
 
 The model never merges, approves, labels, or touches `.github/`, lockfiles, hooks or agent configuration; the last is enforced by code, not by asking.
 

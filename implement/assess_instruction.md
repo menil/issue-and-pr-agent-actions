@@ -33,14 +33,20 @@ it and no markdown:
 - `valid`: `yes` if it is a real defect, or a coherent request that fits the project; `no`
   if it is not; `unclear` if you cannot tell. Do not judge whether it is worth doing.
 - `reproduced`: `yes` only if you ran something and saw the reported problem, and then
-  `evidence` must say what you ran and what it printed. `no` if you ran it and did not see
-  the problem. `not_applicable` for a change request. `not_attempted` if you did not run
-  anything, or could not. Saying `yes` without having run it is the worst mistake you can
-  make here; `not_attempted` is always acceptable.
+  `evidence` must say what you ran and what it printed. `by_reading` if you could not run
+  anything that shows the problem, but you read the code and can point to where it goes
+  wrong: `evidence` must then name the file and line and say what the code does there, not
+  repeat what the issue says. This is weaker than `yes`, and a fix will start from it, so
+  be exact; the fix has to show the problem with a failing test before it changes anything.
+  `no` if you ran it and did not see the problem. `not_applicable` for a change request.
+  `not_attempted` if you did not run anything and cannot point at the code. Saying `yes`
+  without having run it, or `by_reading` without pointing at the code, is the worst mistake
+  you can make here; `not_attempted` is always acceptable.
 - `effort`: `small` for a few lines in one place, `medium` for several places or a new
   test setup, `large` for many files or a design decision.
-- `evidence`: the command you ran and the relevant part of its output, at most 1500
-  characters. An empty string if you ran nothing.
+- `evidence`: the command you ran and the relevant part of its output, or for `by_reading`
+  the file, the line and what the code does there, at most 1500 characters. An empty string
+  if you ran nothing and cannot point at the code.
 - `summary`: one or two plain sentences saying what the problem is and where it is, at
   most 600 characters.
 
