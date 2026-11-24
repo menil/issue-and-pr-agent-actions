@@ -89,6 +89,22 @@ def test_a_labeller_without_write_access_does_not(permission: str | None) -> Non
         check_issue(_raw(author_association="NONE"), actor_permission=permission)
 
 
+@pytest.mark.parametrize("permission", ["triage", "read", "none", ""])
+def test_a_labeller_without_write_access_is_refused_even_for_a_trusted_author(
+    permission: str,
+) -> None:
+    """Whoever applies the label starts the run, so it is their access that counts."""
+    with pytest.raises(NotTrusted, match="label"):
+        check_issue(_raw(author_association="OWNER"), actor_permission=permission)
+
+
+@pytest.mark.parametrize("permission", ["admin", "maintain", "write"])
+def test_a_labeller_with_write_access_is_fine_for_a_trusted_author(
+    permission: str,
+) -> None:
+    check_issue(_raw(author_association="OWNER"), actor_permission=permission)
+
+
 def test_the_labeller_cannot_vouch_for_a_pull_request_or_a_bot() -> None:
     with pytest.raises(NotTrusted):
         check_issue(_raw(pull_request={}), actor_permission="admin")
@@ -569,11 +585,28 @@ def test_fetch_lets_a_maintainers_label_vouch_for_an_outsiders_issue(
     assert ("GET", "/collaborators/maintainer/permission", None) in api.calls
 
 
-def test_fetch_does_not_ask_about_the_actor_when_the_author_is_trusted(
+def test_fetch_asks_about_the_labeller_even_when_the_author_is_trusted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub(issue=_raw(), permission="write")
+    code, _ = _run("fetch", api, tmp_path, monkeypatch, ACTOR_LOGIN="someone")
+    assert code == 0
+    assert ("GET", "/collaborators/someone/permission", None) in api.calls
+
+
+def test_fetch_refuses_a_labeller_without_write_access_for_a_trusted_author(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub(issue=_raw(), permission="triage")
+    code, _ = _run("fetch", api, tmp_path, monkeypatch, ACTOR_LOGIN="someone")
+    assert code == 1 and not (tmp_path / ".agent-issue.md").exists()
+
+
+def test_fetch_asks_about_nobody_when_the_run_was_not_started_by_a_label(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     api = FakeGitHub(issue=_raw())
-    _run("fetch", api, tmp_path, monkeypatch, ACTOR_LOGIN="someone")
+    _run("fetch", api, tmp_path, monkeypatch)
     assert not [c for c in api.calls if "permission" in c[1]]
 
 
@@ -583,6 +616,14 @@ def test_fetch_treats_an_actor_it_cannot_look_up_as_having_no_access(
     api = FakeGitHub(issue=_raw(author_association="NONE"), permission=_http_error(404))
     code, _ = _run("fetch", api, tmp_path, monkeypatch, ACTOR_LOGIN="ghost")
     assert code == 1 and not (tmp_path / ".agent-issue.md").exists()
+
+
+def test_fetch_treats_a_labeller_it_cannot_look_up_as_having_no_access_for_anyone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub(issue=_raw(), permission=_http_error(404))
+    code, _ = _run("fetch", api, tmp_path, monkeypatch, ACTOR_LOGIN="ghost")
+    assert code == 1
 
 
 @pytest.mark.parametrize("number", ["", "abc", "17; rm -rf /", "-1", "1.5", " 17"])

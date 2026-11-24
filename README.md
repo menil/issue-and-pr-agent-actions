@@ -185,6 +185,38 @@ What it does and does not do:
 - The comment is the one place model-written text reaches the thread. It goes through the same sanitizer as review comments, and is set in a fixed template.
 - If the model fails or answers in an unusable form, nothing is changed and the run still succeeds. Missing credentials fail the run, as in the review action.
 
+## Issue implementation
+
+> [!NOTE]
+> Not released yet. These actions are on `main`; a release tag that contains them comes after the first repository has used them. Until then pin to a commit.
+
+Three more actions under `implement/` take an issue from "reported" to a **draft pull request**, for a person to review. They are used from one workflow, [`implement/example-workflow.yml`](implement/example-workflow.yml), copied into the repository. The design, the threat model and what was measured in a trial are in [docs/implement-action.md](docs/implement-action.md).
+
+1. **`implement/assess`** reads the issue and runs a model with read-only tools to decide whether it is real, whether it reproduces and how large the fix would be. It returns a verdict.
+2. **`implement/report`** (no model) checks the verdict against a fixed contract, adds `repro:*` and `effort:*` labels from a fixed table, posts one comment, and says whether to go on. It goes on only if the issue is valid, reproduced (or a change request) and not large.
+3. **`implement/fix`** lets a model edit files and run the repository's tests, then code refuses anything that must not be committed, pushes `agent/issue-N` and opens a **draft** pull request.
+
+The model never merges, approves, labels, or touches `.github/`, lockfiles, hooks or agent configuration; the last is enforced by code, not by asking.
+
+### Who can start a run
+
+- **An issue opened by an owner, member or collaborator**, when the repository variable `AGENT_AUTO` is `true`. Off by default.
+- **The `ready-to-implement` label**, whoever wrote the issue. The person who applied it must have write access (the action checks, whoever the author is), so a stranger's issue only runs because a maintainer chose it.
+- **Never** for a bot, for an issue labelled `no-agent`, or for one that already has a `repro:*` label. To run an assessed issue again, remove its `repro:*` labels.
+
+### Setting it up
+
+1. Copy `implement/example-workflow.yml` to `.github/workflows/implement-issue.yml` and edit the three places marked `EDIT`: the release tag, the commands the model may run, and a few notes about the repository. The commands are the only things the model can run besides reading files, so name the narrowest ones that work, for example `Bash(cargo test:*)`.
+2. Add the `CLAUDE_CODE_OAUTH_TOKEN` secret (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`). Only the two jobs that run a model get it.
+3. Turn on **Settings, Actions, General, "Allow GitHub Actions to create and approve pull requests"**. It is off by default and a workflow cannot turn it on. Without it the branch is pushed but the pull request is refused, and the job says so.
+4. Optionally set `AGENT_AUTO` (`gh variable set AGENT_AUTO --body true`) so that your own new issues are worked on automatically.
+
+### What to expect
+
+- **One click per pull request.** A pull request opened with the workflow's own token does not run `validate` or the review on its own: GitHub creates those runs and holds them until a person clicks "Approve and run". That is the price of not putting a personal access token in a secret.
+- **The model is a risk even so.** It reads text an outsider may have written, with your Claude token in the job's environment and a test command it can edit and run. Write the allowed commands narrowly, keep `AGENT_AUTO` off in a repository with strangers' issues, and read the design document's section on what could still go wrong.
+- **It uses your subscription,** not an API key. One small issue took about 15 seconds of model time across the two stages in a trial; heavy use is unmeasured.
+
 ## Output safety
 
 The model reads the pull request diff, which its author controls, so a hostile diff can try to steer what the model writes (indirect prompt injection). Rather than relying on the model to refuse, everything it writes is rewritten before it is posted, so GitHub never sees the original text outside code blocks:

@@ -33,7 +33,13 @@ class Sandbox:
         (self.bin / "python").symlink_to(sys.executable)
         gh = self.bin / "gh"
         gh.write_text(
-            f'#!/bin/sh\necho "$@" >> "{self.gh_log}"\necho https://github.com/o/r/pull/99\n'
+            f'#!/bin/sh\necho "$@" >> "{self.gh_log}"\n'
+            'if [ -n "$GH_FAIL" ]; then\n'
+            '  echo "GraphQL: GitHub Actions is not permitted to create or approve pull requests'
+            ' (createPullRequest)" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+            "echo https://github.com/o/r/pull/99\n"
         )
         gh.chmod(0o755)
         self.gitconfig = tmp_path / "gitconfig"
@@ -150,6 +156,16 @@ def test_a_good_fix_is_pushed_on_its_own_branch_and_opened_as_a_draft(
     assert log.count("pr create") == 1
     assert log.startswith("pr create --draft --base main --head agent/issue-17")
     assert "pull_request_url=https://github.com/o/r/pull/99" in box.output.read_text()
+
+
+def test_a_refused_pull_request_says_which_setting_to_turn_on(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    done = box.run(GH_FAIL="1")
+    assert done.returncode != 0
+    assert "Allow GitHub Actions to create and approve pull requests" in done.stdout
+    assert "agent/issue-17" in done.stdout and "was pushed" in done.stdout
+    assert "gh: GraphQL: GitHub Actions is not permitted" in done.stdout
+    assert "pull_request_url" not in box.output.read_text()
 
 
 def test_the_issue_file_is_never_committed(box: Sandbox) -> None:

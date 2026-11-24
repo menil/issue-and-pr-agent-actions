@@ -152,9 +152,11 @@ class Report:
 def check_issue(raw: Any, actor_permission: str | None = None) -> TrustedIssue:
     """Accept an issue only if a trusted person stands behind it.
 
-    The author counts if they are an owner, member or collaborator. Otherwise a person
-    with write access who applied the label (`actor_permission`) can vouch for it. A pull
-    request and a bot's issue are never accepted, whoever vouches.
+    When a person applied the label that started the run, `actor_permission` is their
+    permission level and it alone decides: they must have write access, whoever wrote
+    the issue, because they are the one spending the run. Otherwise the author must be an
+    owner, member or collaborator. A pull request and a bot's issue are never accepted,
+    whoever vouches.
     """
     if not isinstance(raw, dict):
         raise NotTrusted("it is not an issue")
@@ -168,12 +170,13 @@ def check_issue(raw: Any, actor_permission: str | None = None) -> TrustedIssue:
     login = str(user.get("login") or "")
     if user.get("type") == "Bot" or login.endswith("[bot]"):
         raise NotTrusted("its author is a bot")
-    association = raw.get("author_association")
-    if (
-        association not in TRUSTED_ASSOCIATIONS
-        and actor_permission not in WRITE_PERMISSIONS
-    ):
-        # Neither value is quoted: the first comes from GitHub, but nothing here depends on that.
+    # No value is quoted below: they come from GitHub, but nothing here depends on that.
+    if actor_permission is not None:
+        if actor_permission not in WRITE_PERMISSIONS:
+            raise NotTrusted(
+                "the person who applied the label does not have write access"
+            )
+    elif raw.get("author_association") not in TRUSTED_ASSOCIATIONS:
         raise NotTrusted("its author is not an owner, member or collaborator")
     return TrustedIssue(
         number=number,
@@ -445,13 +448,9 @@ def run_fetch() -> None:
     repo, token, number = _settings()
     raw = triage.github_request("GET", repo, f"/issues/{number}", token)
     actor = os.environ.get("ACTOR_LOGIN", "")
+    permission = actor_permission(repo, actor, token) if actor else None
     try:
-        try:
-            issue = check_issue(raw)
-        except NotTrusted:
-            if not actor:
-                raise
-            issue = check_issue(raw, actor_permission(repo, actor, token))
+        issue = check_issue(raw, permission)
     except NotTrusted as reason:
         _fail(f"Not starting a run for #{number}: {reason}.")
     write_issue_file(issue_markdown(issue))

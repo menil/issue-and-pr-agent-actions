@@ -139,9 +139,14 @@ runs:
         git add -A
         git commit -q -m "fix: address issue #${NUMBER}"
         git push "$remote" "$branch"
-        url=$(gh pr create --draft --base "$BASE_BRANCH" --head "$branch" \
+        failure="$(mktemp)"
+        if ! url=$(gh pr create --draft --base "$BASE_BRANCH" --head "$branch" \
           --title "fix: address issue #${NUMBER}" \
           --body "Opened automatically from #${NUMBER}, as a draft. A model wrote this change; nothing here has been reviewed, merged or approved by it. Read the change and its regression test before anything else.
 
-        Closes #${NUMBER}")
+        Closes #${NUMBER}" 2> "$failure"); then
+          sed 's/^/gh: /' "$failure"
+          echo "::error::The branch $branch was pushed but the pull request could not be opened. If GitHub says Actions may not create pull requests, turn on 'Allow GitHub Actions to create and approve pull requests' under Settings, Actions, General. Then delete the branch and run again."
+          exit 1
+        fi
         echo "pull_request_url=$url" >> "$GITHUB_OUTPUT"

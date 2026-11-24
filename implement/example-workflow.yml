@@ -1,0 +1,113 @@
+# Copy this file to .github/workflows/implement-issue.yml in your repository and edit the
+# three places marked EDIT. Read "Issue implementation" in the README first: it needs a
+# repository setting turned on, uses your Claude subscription, and has risks to understand.
+#
+# What it does: for an issue by someone with write access (when AGENT_AUTO is on), or an
+# issue a maintainer labels ready-to-implement, a model assesses whether it is real and
+# reproducible; if so, another run writes a fix and opens a DRAFT pull request. A person
+# reviews and merges it. The model never merges, approves or labels.
+name: Implement issue
+
+on:
+  issues:
+    types: [opened, labeled]
+
+# Nothing by default: each job asks for exactly what it needs, and none asks for `workflows`.
+permissions: {}
+
+# One run per issue, queued and never cancelled halfway.
+concurrency:
+  group: implement-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  assess:
+    # Decided before any model runs, from the event alone. A run starts only for:
+    #  - an issue just opened by an owner, member or collaborator, and only if the
+    #    repository variable AGENT_AUTO is 'true'; or
+    #  - the ready-to-implement label, applied by someone the action then checks has write
+    #    access (a stranger's issue only ever runs because a maintainer chose it).
+    # Never for a bot, an issue labelled no-agent, or one that has been assessed already.
+    if: >-
+      github.event.issue.user.type != 'Bot'
+      && !contains(github.event.issue.labels.*.name, 'no-agent')
+      && !contains(join(github.event.issue.labels.*.name, ','), 'repro:')
+      && (
+        (github.event.action == 'opened'
+          && vars.AGENT_AUTO == 'true'
+          && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+        || (github.event.action == 'labeled'
+          && github.event.label.name == 'ready-to-implement')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      verdict: ${{ steps.assess.outputs.verdict }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Assess the issue
+        id: assess
+        # EDIT: pin to a release tag of menil/pr-code-review-action, as for any action
+        # that is handed a token.
+        uses: menil/pr-code-review-action/implement/assess@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          issue_number: ${{ github.event.issue.number }}
+          # Only when a label started the run: that person must have write access.
+          actor_login: ${{ github.event.action == 'labeled' && github.event.sender.login || '' }}
+          # EDIT: the commands the model may run to reproduce a problem. Nothing else is
+          # allowed apart from reading files. One command per pattern, comma-separated.
+          command_tools: 'Bash(cargo test:*)'
+          # EDIT: what a newcomer needs to know about this repository.
+          repository_notes: |
+            Run the tests with `cargo test`.
+
+  report:
+    needs: assess
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    outputs:
+      proceed: ${{ steps.report.outputs.proceed }}
+    steps:
+      - name: Write the assessment
+        id: report
+        uses: menil/pr-code-review-action/implement/report@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          verdict: ${{ needs.assess.outputs.verdict }}
+
+  fix:
+    needs: [assess, report]
+    if: needs.report.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Fix the issue and open a draft pull request
+        # EDIT: the same release tag as above.
+        uses: menil/pr-code-review-action/implement/fix@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          issue_number: ${{ github.event.issue.number }}
+          actor_login: ${{ github.event.action == 'labeled' && github.event.sender.login || '' }}
+          # EDIT: the same commands and notes as above, plus whatever builds and tests.
+          command_tools: 'Bash(cargo test:*),Bash(cargo build:*)'
+          repository_notes: |
+            Run the tests with `cargo test`.

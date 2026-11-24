@@ -38,7 +38,7 @@ from its documentation:
 
 | | Decision |
 |---|---|
-| Who starts a run | By default only an issue **opened by someone with write access** (`author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`, checked in the workflow as well as by the action). Anyone else's issue starts nothing; see "Other people's issues". |
+| Who starts a run | By default only an issue **opened by someone with write access** (`author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`, checked in the workflow's `if:` and again by `fetch`). When a **label** starts it, the person who applied the label must have write access, whoever wrote the issue, because they are the one spending the run. Anyone else's issue starts nothing; see "Other people's issues". |
 | Automatic or not | Opt-in per repository by a variable, `AGENT_AUTO=true`, default off. With it off, nothing starts until a maintainer applies `ready-to-implement`. |
 | Stages | Three jobs, because a job's permissions are fixed for all its steps: **assess** (model, read-only), **report** (code only, `issues: write`), then **fix** (model, `contents` and `pull-requests: write`), only if the gate passed. |
 | What the model decides | A verdict and, in stage two, the code of a draft PR. Never a label, a comment's markdown, a branch name or a command outside the allowlist. |
