@@ -61,6 +61,33 @@ def test_the_reason_is_cut_to_a_bound() -> None:
     assert len(stop_reason("word " * 5000)) <= MAX_STOP_REASON_CHARS
 
 
+def test_the_cap_leaves_room_for_a_real_explanation() -> None:
+    assert MAX_STOP_REASON_CHARS >= 1000
+
+
+def test_a_reason_that_fits_is_left_exactly_as_it_is() -> None:
+    text = "x" * MAX_STOP_REASON_CHARS
+    assert stop_reason(text) == text
+    assert "…" not in stop_reason("A short reason.")
+
+
+def test_a_cut_reason_ends_with_an_ellipsis_at_a_word() -> None:
+    cut = stop_reason("word " * 5000)
+    assert cut.endswith("word…") and len(cut) <= MAX_STOP_REASON_CHARS
+    # One character over the cap is cut too, and says so.
+    assert stop_reason("x" * (MAX_STOP_REASON_CHARS + 1)).endswith("…")
+
+
+def test_one_very_long_word_is_cut_hard_with_an_ellipsis() -> None:
+    cut = stop_reason("y" * 5000)
+    assert len(cut) == MAX_STOP_REASON_CHARS and cut.endswith("y…")
+
+
+def test_cutting_twice_changes_nothing_more() -> None:
+    once = stop_reason("word " * 5000)
+    assert stop_reason(once) == once
+
+
 def test_invisible_characters_are_removed() -> None:
     assert stop_reason("a‮b​c") == "abc"
 
@@ -98,6 +125,13 @@ def test_only_a_few_are_shown() -> None:
 def test_a_long_command_is_cut() -> None:
     (entry,) = denied_commands(_result(_bash("x" * 5000)))
     assert len(entry) <= MAX_DENIED_CHARS
+
+
+def test_a_cut_command_ends_with_an_ellipsis_and_a_short_one_does_not() -> None:
+    (cut,) = denied_commands(_result(_bash("x" * 5000)))
+    assert cut.endswith("…") and len(cut) == MAX_DENIED_CHARS
+    (short,) = denied_commands(_result(_bash("uv run pytest")))
+    assert short == "Bash: uv run pytest"
 
 
 @pytest.mark.parametrize(
@@ -246,3 +280,36 @@ def test_the_denials_command_prints_them_inertly(
         implement.main(["denials"])
     out = capsys.readouterr().out
     assert "uv run pytest" in out and not _starts_a_command(out)
+
+
+def test_one_long_word_after_a_short_prefix_is_not_lost() -> None:
+    """Backing up to the only space would leave just the prefix."""
+    (cut,) = denied_commands(_result(_bash("x" * 5000)))
+    assert cut.startswith("Bash: xxxx") and cut.endswith("x…")
+    reason = stop_reason("Because " + "y" * 5000)
+    assert reason.startswith("Because yyyy") and len(reason) == MAX_STOP_REASON_CHARS
+
+
+def _one_space_at(position: int) -> str:
+    """Text whose only space is at `position`, followed by a word far longer than the cap."""
+    return "x" * position + " " + "y" * 5000
+
+
+@pytest.mark.parametrize("position", [800, 801, 850, 990, 998])
+def test_a_space_in_the_last_fifth_is_backed_up_to(position: int) -> None:
+    """800 is the threshold itself (a fifth of 1000 from the end), and counts."""
+    assert stop_reason(_one_space_at(position)) == "x" * position + "…"
+
+
+@pytest.mark.parametrize("position", [5, 700, 799])
+def test_a_space_before_the_last_fifth_is_not_backed_up_to(position: int) -> None:
+    cut = stop_reason(_one_space_at(position))
+    assert len(cut) == MAX_STOP_REASON_CHARS
+    assert cut.startswith("x" * position + " yyy") and cut.endswith("y…")
+
+
+def test_a_space_exactly_where_the_cut_falls_needs_no_backing_up() -> None:
+    """The first character left out is the space, so the cut is already between words."""
+    assert stop_reason(_one_space_at(MAX_STOP_REASON_CHARS - 1)) == (
+        "x" * (MAX_STOP_REASON_CHARS - 1) + "…"
+    )
