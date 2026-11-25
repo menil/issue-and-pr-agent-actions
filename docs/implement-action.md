@@ -277,6 +277,33 @@ and its own calls are ignored, because the pin script owns them.
 a commit-pinned reusable workflow in a repository that calls it; if it does not, the
 repository's version bump is a one-line edit.
 
+## When the fix stage is done
+
+The fix stage is told to change nothing if it cannot show the problem with a test that fails for
+the reason the issue gives. That is the safety the stage relies on, and it is not rare: a race
+condition, a problem that needs a real device, an issue whose cause the model misread. The first
+version treated an empty change as an error, so the run was red and the issue got the failure
+comment, whose advice (remove the labels and try again) is wrong for it: a retry gives the same
+answer.
+
+The fix action now reports what it did as an output, `outcome`: `opened` or `no_change`. An empty
+change is told apart first, before anything is checked, named, committed or pushed, and ends the
+step cleanly. A change that must not be committed (a protected path, too many files, a symbolic
+link) is still an error, because that is the model going somewhere it should not.
+
+`finish` handles both outcomes, in the same job and with the same permission (`issues: write`):
+
+- **`opened`**, below: `ready-to-implement` off, `pr-open` on, one comment linking the pull
+  request.
+- **`no_change`**: `ready-to-implement` off, `needs-human` on, and one comment, once per issue:
+  the agent worked on it and made no changes, because it could not show the problem with a
+  failing test (or found the issue was not what it said), nothing was committed or opened, a
+  person should take it from here, and how to try again anyway. The text is fixed and never says
+  the run failed; nothing the model wrote is used, and no URL is needed.
+
+`failure()` is true only when a stage fails, so a run that ends this way does not make `notify`
+comment. The assessment's `repro:` label stays, so the issue is not assessed again by accident.
+
 ## After the pull request is open
 
 The issue still carried `ready-to-implement`, which says "work on this", and nothing said a

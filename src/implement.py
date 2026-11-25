@@ -777,6 +777,13 @@ TRIGGER_LABEL = "ready-to-implement"
 OPENED_LABEL = "pr-open"
 PR_OPEN_COLOR = "8250df"
 PR_OPEN_DESCRIPTION = "A pull request was opened for this issue"
+NEEDS_HUMAN_LABEL = "needs-human"
+NEEDS_HUMAN_COLOR = "e99695"
+NEEDS_HUMAN_DESCRIPTION = "The agent could not do this; a person should"
+# What the fix stage did: opened a pull request, or changed nothing because it could not
+# show the problem with a failing test. A refused change is neither: it is an error.
+OUTCOMES = ("opened", "no_change")
+NO_CHANGE_MARKER = "<!-- agent-implement:no-change -->"
 
 
 def opened_comment(pull_request: int) -> str:
@@ -786,6 +793,20 @@ def opened_comment(pull_request: int) -> str:
         f"A pull request was opened for this issue: #{pull_request}. A model wrote it; "
         "nothing has been merged or approved, and a person has to review it.\n\n"
         f"<!-- agent-implement:opened:{pull_request} -->"
+    )
+
+
+def no_change_comment() -> str:
+    """The one comment left when the fix stage changed nothing. It is fixed text: the model's
+    own words are not used, and it does not say the run failed, because it did not."""
+    return (
+        "The agent worked on this issue and made no changes. It only changes code once it "
+        "can show the problem with a failing test, for the reason the issue gives; here it "
+        "could not, or it found the issue was not what it said. Nothing was committed or "
+        "opened, and a person should take it from here.\n\n"
+        "To try it again anyway, remove its `repro:` labels and `needs-human`, delete the "
+        "assessment comment, and apply `ready-to-implement` again.\n\n"
+        f"{NO_CHANGE_MARKER}"
     )
 
 
@@ -958,18 +979,19 @@ def run_notify(kind: str) -> None:
     print(f"Left the {kind} comment on #{number}.")
 
 
-def run_finish() -> None:
-    """Tidy the issue once its pull request is open: the trigger label comes off, the status
-    label goes on, and one comment links the pull request. All of it is fixed text and fixed
-    labels; the only input is the pull request's number, taken from its URL.
+def _tidy(
+    repo: str,
+    token: str,
+    number: int,
+    label: tuple[str, str, str],
+    marker: str,
+    comment: str,
+) -> None:
+    """Take the trigger label off, put the status label on, then leave the comment once.
 
     The comment is last because its marker says the issue was tidied: if a step before it
     fails, a second run starts over instead of stopping with the work half done."""
-    repo, token, number = _settings()
-    try:
-        pull_request = pull_request_number(os.environ.get("PULL_REQUEST_URL", ""), repo)
-    except ValueError:
-        _fail("PULL_REQUEST_URL is not the URL of a pull request of this repository.")
+    name, color, description = label
     try:
         triage.github_request(
             "DELETE", repo, f"/issues/{number}/labels/{TRIGGER_LABEL}", token
@@ -977,23 +999,59 @@ def run_finish() -> None:
     except urllib.error.HTTPError as error:
         if error.code != 404:  # 404: the label was not on the issue
             raise
-    triage.create_label(repo, token, OPENED_LABEL, PR_OPEN_COLOR, PR_OPEN_DESCRIPTION)
+    triage.create_label(repo, token, name, color, description)
     triage.github_request(
-        "POST", repo, f"/issues/{number}/labels", token, {"labels": [OPENED_LABEL]}
+        "POST", repo, f"/issues/{number}/labels", token, {"labels": [name]}
     )
     comments = triage.github_request(
         "GET", repo, f"/issues/{number}/comments?per_page=100", token
     )
-    marker = f"<!-- agent-implement:opened:{pull_request} -->"
     if has_marker(comments if isinstance(comments, list) else [], marker):
-        print(f"#{number} has already been told about #{pull_request}.")
+        print(f"#{number} already has this comment; leaving it out.")
         return
     triage.github_request(
-        "POST",
+        "POST", repo, f"/issues/{number}/comments", token, {"body": comment}
+    )
+
+
+def run_finish() -> None:
+    """Tidy the issue when the fix stage is done, whichever way it ended.
+
+    A pull request was opened: the trigger label comes off, `pr-open` goes on and one
+    comment links the pull request. The only input is its number, from its URL.
+    The agent changed nothing: the trigger label comes off, `needs-human` goes on and one
+    comment says so. No URL is needed, and none is used.
+
+    All of it is fixed text and fixed labels. Anything else is refused before a write."""
+    repo, token, number = _settings()
+    outcome = os.environ.get("OUTCOME", "opened")
+    if outcome not in OUTCOMES:
+        _fail("OUTCOME is not one of: " + ", ".join(OUTCOMES) + ".")
+    if outcome == "no_change":
+        _tidy(
+            repo,
+            token,
+            number,
+            (NEEDS_HUMAN_LABEL, NEEDS_HUMAN_COLOR, NEEDS_HUMAN_DESCRIPTION),
+            NO_CHANGE_MARKER,
+            no_change_comment(),
+        )
+        print(f"Tidied #{number}: the agent changed nothing.")
+        return
+    try:
+        pull_request = pull_request_number(os.environ.get("PULL_REQUEST_URL", ""), repo)
+    except ValueError:
+        _fail(
+            "PULL_REQUEST_URL is not the URL of a pull request of this repository. It is "
+            "needed when a pull request was opened."
+        )
+    _tidy(
         repo,
-        f"/issues/{number}/comments",
         token,
-        {"body": opened_comment(pull_request)},
+        number,
+        (OPENED_LABEL, PR_OPEN_COLOR, PR_OPEN_DESCRIPTION),
+        f"<!-- agent-implement:opened:{pull_request} -->",
+        opened_comment(pull_request),
     )
     print(f"Tidied #{number}: pull request #{pull_request} is open.")
 

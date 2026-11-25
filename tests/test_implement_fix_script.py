@@ -279,7 +279,25 @@ def test_the_description_file_is_never_committed(box: Sandbox) -> None:
 def test_a_description_alone_is_not_a_change(box: Sandbox) -> None:
     box.write(".agent-change.md", CHANGE)
     done = box.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "outcome=no_change" in box.output.read_text()
+    assert box.remote_branches() == ["main"] and box.gh_calls() == []
+
+
+def test_a_change_that_is_opened_says_so(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    assert box.run().returncode == 0
+    assert "outcome=opened" in box.output.read_text()
+    assert "outcome=no_change" not in box.output.read_text()
+
+
+def test_a_refused_change_is_still_a_failure_not_an_outcome(box: Sandbox) -> None:
+    """Only an empty change is an outcome. A change that must not be committed is the
+    model going somewhere it should not, and that stays an error."""
+    box.write("Cargo.lock", "changed\n")
+    done = box.run()
     assert done.returncode != 0
+    assert "outcome=" not in box.output.read_text()
     assert box.remote_branches() == ["main"] and box.gh_calls() == []
 
 
@@ -362,10 +380,16 @@ def test_a_change_made_through_a_symbolic_link_is_still_seen_at_its_real_path(
     assert box.remote_branches() == ["main"] and box.gh_calls() == []
 
 
-def test_no_change_is_not_a_pull_request(box: Sandbox) -> None:
+def test_no_change_is_an_outcome_not_a_failure(box: Sandbox) -> None:
+    """The model must change nothing when it cannot show the problem with a failing test.
+    That is the instruction being followed, so the step succeeds and says so."""
     done = box.run()
-    assert done.returncode != 0
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "outcome=no_change" in box.output.read_text()
+    assert "pull_request_url" not in box.output.read_text()
     assert box.remote_branches() == ["main"] and box.gh_calls() == []
+    assert box.commits_ahead_of_main() == 0
+    assert box._git(box.work, "branch", "--show-current").strip() == "main"
 
 
 @pytest.mark.parametrize("number", ["", "x", "17; touch /tmp/pwned", "-1", "1 2"])

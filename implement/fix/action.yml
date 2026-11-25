@@ -44,8 +44,11 @@ inputs:
 
 outputs:
   pull_request_url:
-    description: 'The pull request that was opened'
+    description: 'The pull request that was opened; empty when nothing was changed'
     value: ${{ steps.open.outputs.pull_request_url }}
+  outcome:
+    description: "'opened' when a pull request was opened, 'no_change' when the model changed nothing (it could not show the problem with a failing test). A change that must not be committed is an error, not an outcome."
+    value: ${{ steps.open.outputs.outcome }}
 
 runs:
   using: 'composite'
@@ -123,8 +126,19 @@ runs:
 
         # Code, not the model, decides what may be committed. Renames are listed as a
         # delete and an add, and files the model created are included.
-        { git diff --name-only --no-renames -z HEAD; git ls-files --others --exclude-standard -z; } \
-          | python "$IMPLEMENT" check-changes
+        changes="$(mktemp)"
+        { git diff --name-only --no-renames -z HEAD; git ls-files --others --exclude-standard -z; } > "$changes"
+
+        # The model is told to change nothing when it cannot show the problem with a failing
+        # test. That is the instruction followed, not an error: say so and stop, before
+        # anything is checked, named, committed or pushed.
+        if [ ! -s "$changes" ]; then
+          echo "The model made no changes; nothing was committed or opened."
+          echo "outcome=no_change" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        python "$IMPLEMENT" check-changes < "$changes"
 
         # The model's own words for the commit and the pull request, read under a fixed
         # contract and made safe; the generic text if its file is missing or wrong.
@@ -168,3 +182,4 @@ runs:
           exit 1
         fi
         echo "pull_request_url=$url" >> "$GITHUB_OUTPUT"
+        echo "outcome=opened" >> "$GITHUB_OUTPUT"

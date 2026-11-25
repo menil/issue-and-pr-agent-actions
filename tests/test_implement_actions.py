@@ -309,3 +309,36 @@ def test_finish_takes_the_url_and_the_number_and_nothing_else_from_the_workflow(
     assert "GITHUB_TOKEN: ${{ inputs.github_token }}" in step
     assert "inputs.pull_request_url" not in action.replace(step, "")  # only in env
     assert MODEL_ACTION not in action and "actions/checkout" not in action
+
+
+def test_the_fix_reports_what_happened_as_an_output() -> None:
+    action = TEXT["fix"]
+    assert "outcome:" in action.split("\nruns:\n", 1)[0]
+    assert "value: ${{ steps.open.outputs.outcome }}" in action
+    script = _fix_script()
+    assert 'echo "outcome=no_change" >> "$GITHUB_OUTPUT"' in script
+    assert 'echo "outcome=opened" >> "$GITHUB_OUTPUT"' in script
+
+
+def test_nothing_changed_is_decided_before_anything_is_checked_or_pushed() -> None:
+    """An empty change is told apart first, and ends the step cleanly; everything after it
+    (the check of what may be committed, the branch, the push) only ever sees a real change."""
+    script = _fix_script()
+    empty = script.index("outcome=no_change")
+    assert empty < script.index("check-changes")
+    assert empty < script.index("git checkout -b")
+    assert empty < script.index("git push")
+    between = script[empty : script.index("check-changes")]
+    assert "exit 0" in between
+
+
+def test_finish_takes_the_outcome_and_the_url_is_only_for_an_opened_pull_request() -> (
+    None
+):
+    action = TEXT["finish"]
+    step = next(s for s in _steps("finish") if "implement.py finish" in s)
+    assert "OUTCOME: ${{ inputs.outcome }}" in step
+    block = re.search(r"(?ms)^  outcome:\n(.*?)(?=^  \w+:\n|^runs:)", action)
+    assert block and "default: 'opened'" in block.group(1)
+    url = re.search(r"(?ms)^  pull_request_url:\n(.*?)(?=^  \w+:\n|^runs:)", action)
+    assert url and "required: true" not in url.group(1)

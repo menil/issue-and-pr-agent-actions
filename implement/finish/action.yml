@@ -1,5 +1,5 @@
 name: 'AI Issue Implementation: finish'
-description: 'Tidies the issue once its pull request is open: takes off ready-to-implement, puts on pr-open and leaves one comment with the link, at most once per pull request. No model runs here, and the labels and text are fixed. Part of the implementation action (docs/implement-action.md).'
+description: 'Tidies the issue when the fix stage is done. If a pull request was opened: takes off ready-to-implement, puts on pr-open and leaves one comment with the link, once per pull request. If the agent changed nothing: takes off ready-to-implement, puts on needs-human and leaves one comment saying so, once. No model runs here, and the labels and text are fixed. Part of the implementation action (docs/implement-action.md).'
 author: 'meni'
 branding:
   icon: 'check-circle'
@@ -14,9 +14,14 @@ inputs:
   issue_number:
     description: 'Number of the issue the pull request was opened for'
     required: true
+  outcome:
+    description: "What the fix stage did, as the fix action outputs it: 'opened' (a pull request was opened) or 'no_change' (it changed nothing). Anything else is refused."
+    required: false
+    default: 'opened'
   pull_request_url:
-    description: 'The URL of the pull request, as the fix action outputs it. Only the exact form of a pull request of this repository is accepted.'
-    required: true
+    description: "The URL of the pull request, as the fix action outputs it. Needed when the outcome is 'opened', and then only the exact form of a pull request of this repository is accepted; not used when nothing changed."
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -31,5 +36,6 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         ISSUE_NUMBER: ${{ inputs.issue_number }}
+        OUTCOME: ${{ inputs.outcome }}
         PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
       run: python ${{ github.action_path }}/../../src/implement.py finish
