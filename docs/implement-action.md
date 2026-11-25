@@ -239,13 +239,15 @@ reaches a repository by changing the version in one `uses:` line.
 
 ### How the nested actions are pinned
 
-A repository pins the `uses:` line of the shared workflow to a full commit, as before. Inside
-that file the actions are another matter: a file cannot name its own commit, and `./` would
+A repository calls the shared workflow by `@v1`, the latest 1.x release, or pins the `uses:`
+line to the full commit of a release. Inside that file the actions are another matter: a file cannot name its own commit, and `./` would
 point at the caller's repository. So they are named by the tag of the release the file ships
 in (`@v1.8.0`). That is only as fixed as the tag, so **releases must be immutable** (GitHub's
 "immutable releases" setting): once a release is published its tag cannot be moved or deleted,
 which makes it as fixed as a commit. Without the setting the pin is weaker than it looks, and
-a push that moved a version tag would run in every repository that pinned the file.
+a push that moved a version tag would run in every repository that pinned the file. A
+repository on `@v1` trusts the `v1` tag itself, which moves at each release by design; the
+locked releases protect the nested actions and the repositories that pin a commit.
 
 `scripts/pin_implement_actions.py X.Y.Z` is the one place that changes those names, and tests
 check that every call names the same plain `vX.Y.Z`. A change that adds an input to an action

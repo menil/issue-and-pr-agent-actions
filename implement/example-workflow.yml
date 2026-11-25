@@ -32,8 +32,8 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-    # EDIT: pin this to the full commit of a release of menil/issue-and-pr-agent-actions, with the
-    # release in a comment, as for any workflow that is handed a token. Dependabot can then
+    # `@v1` follows the latest 1.x release of menil/issue-and-pr-agent-actions. For a fixed version,
+    # pin the full commit of a release instead, with the release in a comment; Dependabot can then
     # bump it.
     uses: menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@v1
     with:
