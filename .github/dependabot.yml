@@ -17,6 +17,7 @@ updates:
     # Claude action). Every directory holding an action.yml is listed; a test checks that.
     directories:
       - "/"
+      - "/review"
       - "/triage"
       - "/implement/assess"
       - "/implement/report"

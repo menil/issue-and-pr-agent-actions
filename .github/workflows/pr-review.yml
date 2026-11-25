@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Run PR Review Action
-        uses: ./
+        uses: ./review
         with:
           # Automatically prefers Claude (Claude Code subscription token first, then billed
           # API key) and falls back to OpenRouter if unavailable or on token/500 errors.

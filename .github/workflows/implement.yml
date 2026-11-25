@@ -223,7 +223,7 @@ jobs:
           fi
 
       - name: Review the pull request
-        uses: menil/issue-and-pr-agent-actions@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/review@v1.10.0
         with:
           provider: auto
           pull_request_number: ${{ steps.pr.outputs.number }}

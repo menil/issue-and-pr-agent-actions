@@ -4,7 +4,7 @@ GitHub Actions that put an AI agent to work on a repository's pull requests and 
 
 | Tool | What it does | Use it as |
 |------|--------------|-----------|
-| **[Pull request review](#features)** | Reads a pull request's diff and posts a summary and inline comments on the lines that changed. | `menil/issue-and-pr-agent-actions@v1` |
+| **[Pull request review](#features)** | Reads a pull request's diff and posts a summary and inline comments on the lines that changed. | `menil/issue-and-pr-agent-actions/review@v1` |
 | **[Issue triage](#issue-triage)** | Labels a newly opened issue, flags a likely duplicate, and asks once for what is missing. It judges nothing and closes nothing. | `menil/issue-and-pr-agent-actions/triage@v1` |
 | **[Issue implementation](#issue-implementation)** | For an issue a maintainer trusts: assesses it, tries to show the problem with a failing test, fixes it, and opens a pull request for a person to review. The jobs live in one reusable workflow, so a repository's own file is short. | `menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@v1` |
 
@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Review Action
-        uses: menil/issue-and-pr-agent-actions@v1
+        uses: menil/issue-and-pr-agent-actions/review@v1
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -57,7 +57,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/issue-and-pr-agent-actions@v1
+        uses: menil/issue-and-pr-agent-actions/review@v1
         with:
           provider: anthropic
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -68,7 +68,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/issue-and-pr-agent-actions@v1
+        uses: menil/issue-and-pr-agent-actions/review@v1
         with:
           provider: anthropic
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -82,7 +82,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/issue-and-pr-agent-actions@v1
+        uses: menil/issue-and-pr-agent-actions/review@v1
         with:
           provider: auto   # default; optional
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -122,7 +122,7 @@ jobs:
           path: .github/actions/issue-and-pr-agent-actions
 
       - name: Run PR Review Action
-        uses: ./.github/actions/issue-and-pr-agent-actions
+        uses: ./.github/actions/issue-and-pr-agent-actions/review
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
 ```

@@ -21,7 +21,7 @@ PROVIDED_BY_THE_RUNNER = {
 # does not need: implement.py serves three actions, and each uses some of what it reads.
 ACTIONS = [
     pytest.param(
-        ROOT / "action.yml",
+        ROOT / "review" / "action.yml",
         ["src/pr_review.py", "src/llm.py"],
         "src/pr_review.py",
         set(),
@@ -173,7 +173,7 @@ def test_the_triage_instructions_sit_beside_the_script() -> None:
 
 # --- reviewing a pull request that did not start the workflow ---
 
-REVIEW = (ROOT / "action.yml").read_text(encoding="utf-8")
+REVIEW = (ROOT / "review" / "action.yml").read_text(encoding="utf-8")
 
 
 def test_the_review_can_be_pointed_at_a_pull_request_by_number() -> None:

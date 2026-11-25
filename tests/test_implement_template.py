@@ -498,14 +498,14 @@ def test_the_review_checks_out_nothing_and_never_runs_the_pull_requests_code() -
 
 def test_the_review_calls_this_repositorys_review_action_with_the_number() -> None:
     job = _job("review")
-    assert "uses: menil/issue-and-pr-agent-actions@v1" in job
+    assert "uses: menil/issue-and-pr-agent-actions/review@v1" in job
     assert "pull_request_number: ${{ steps.pr.outputs.number }}" in job
     assert "claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in job
 
 
 def test_every_input_the_review_step_passes_is_one_the_review_action_declares() -> None:
-    action = (ROOT / "action.yml").read_text(encoding="utf-8")
-    step = _job("review").split("issue-and-pr-agent-actions@v1", 1)[1]
+    action = (ROOT / "review" / "action.yml").read_text(encoding="utf-8")
+    step = _job("review").split("issue-and-pr-agent-actions/review@v1", 1)[1]
     passed = set(re.findall(r"(?m)^          (\w+):", step))
     assert passed and passed <= _declared_inputs(action), passed - _declared_inputs(
         action

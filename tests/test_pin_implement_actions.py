@@ -20,7 +20,7 @@ jobs:
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
       - uses: menil/issue-and-pr-agent-actions/implement/assess@v1.7.0
       - uses: menil/issue-and-pr-agent-actions/implement/fix@v1.7.0
-      - uses: menil/issue-and-pr-agent-actions@v1.7.0
+      - uses: menil/issue-and-pr-agent-actions/review@v1.7.0
       - name: other
         run: echo menil/issue-and-pr-agent-actions/implement/assess@v1.7.0
 """
@@ -31,7 +31,7 @@ def test_every_call_to_this_repositorys_actions_gets_the_new_version() -> None:
     assert count == 3
     assert text.count("@v1.8.0") == 3 and "@v1.7.0" in text  # the one in `run:` stays
     assert "uses: menil/issue-and-pr-agent-actions/implement/assess@v1.8.0" in text
-    assert "uses: menil/issue-and-pr-agent-actions@v1.8.0" in text
+    assert "uses: menil/issue-and-pr-agent-actions/review@v1.8.0" in text
 
 
 def test_other_actions_are_left_alone() -> None:
@@ -91,7 +91,7 @@ def test_the_command_line_rewrites_the_file(
     target = tmp_path / "implement.yml"
     target.write_text(SAMPLE, encoding="utf-8")
     assert pin.main(["1.8.0", str(target)]) == 0
-    assert "uses: menil/issue-and-pr-agent-actions@v1.8.0" in target.read_text()
+    assert "uses: menil/issue-and-pr-agent-actions/review@v1.8.0" in target.read_text()
     assert "3" in capsys.readouterr().out
 
 
