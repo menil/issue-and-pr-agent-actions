@@ -6,7 +6,7 @@ GitHub Actions that put an AI agent to work on a repository's pull requests and 
 |------|--------------|-----------|
 | **[Pull request review](#features)** | Reads a pull request's diff and posts a summary and inline comments on the lines that changed. | `menil/issue-and-pr-agent-actions@v1` |
 | **[Issue triage](#issue-triage)** | Labels a newly opened issue, flags a likely duplicate, and asks once for what is missing. It judges nothing and closes nothing. | `menil/issue-and-pr-agent-actions/triage@v1` |
-| **[Issue implementation](#issue-implementation)** | For an issue a maintainer trusts: assesses it, tries to show the problem with a failing test, fixes it, and opens a pull request for a person to review. The jobs live in one reusable workflow, so a repository's own file is short. | `menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@<commit>` |
+| **[Issue implementation](#issue-implementation)** | For an issue a maintainer trusts: assesses it, tries to show the problem with a failing test, fixes it, and opens a pull request for a person to review. The jobs live in one reusable workflow, so a repository's own file is short. | `menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@v1` |
 
 They work together: the implementation workflow runs the review on the pull request it opens. Each can be used alone. The design and threat model of each are in [docs/](docs/): [triage](docs/triage-action.md) and [implementation](docs/implement-action.md).
 
@@ -222,13 +222,13 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
 
 1. Copy `implement/example-workflow.yml` to `.github/workflows/implement-issue.yml` and edit the places marked `EDIT`. It is short: your triggers, one job that calls the shared workflow in this repository (`.github/workflows/implement.yml`, which holds every job, the check on who may start a run and what each job may touch), and your own settings: the commands the model may run and a few notes about the repository. The commands are the only things the model can run besides reading files, so name the narrowest ones that work, for example `Bash(cargo test:*)`. A pattern that would give it a shell, the network, git, the environment or a way to read any file (`Bash(bash:*)`, `Bash(curl:*)`, `Bash(cat:*)`, a bare `Bash(python3:*)`) is refused before any model runs. If the tests need a Nix shell, set `install_nix: true`.
 
-   Pin the `uses:` line to the full commit of a release, with the release in a comment, as for any workflow that is handed a token:
+   Call it by `@v1`, like the other two:
 
    ```yaml
-   uses: menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@<full commit sha> # v1.10.0
+   uses: menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@v1
    ```
 
-   That line is all that changes when this repository does: the jobs, the permissions and the guards come with the version. Dependabot's `github-actions` updates bump the line in a pull request, so you do not have to; see [docs/implement-action.md](docs/implement-action.md#a-reusable-workflow) for what that relies on.
+   `@v1` follows the latest 1.x release, so nothing in your repository changes when this one does: the jobs, the permissions and the guards come with the version. To hold a fixed version instead, use the full commit of a release with the release in a comment (`@<full commit sha> # v1.10.0`); Dependabot's `github-actions` updates then bump the line in a pull request. See [docs/implement-action.md](docs/implement-action.md#a-reusable-workflow) for what that relies on.
 2. Add the `CLAUDE_CODE_OAUTH_TOKEN` secret (`gh secret set CLAUDE_CODE_OAUTH_TOKEN`). Only the two jobs that run a model get it.
 3. Once per repository, with an admin login, from inside the repository: turn on the setting that lets workflows open pull requests, and create the two labels a person applies. The actions create every other label themselves, but the label picker only offers labels that exist.
 
@@ -288,10 +288,6 @@ git push origin vX.Y.Z
 git push --force origin v1
 gh release create vX.Y.Z --title "vX.Y.Z" --notes-file notes.md --latest --verify-tag
 ```
-
-### Renamed from `pr-code-review-action`
-
-This repository was called `menil/pr-code-review-action` up to `v1.9.0`, when review was its only tool. GitHub does not redirect `uses:` references after a rename, so a workflow that still names the old repository stops working: change it to `menil/issue-and-pr-agent-actions` and move to `v1.10.0` or later. The releases up to `v1.9.0` keep the old name inside their shared workflow and cannot be changed, so they stop working too.
 
 ## Development
 
