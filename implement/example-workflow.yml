@@ -8,7 +8,7 @@
 # A person reviews and merges it. The model never merges, approves or labels.
 #
 # All the jobs, the guard that decides who may start a run and what each job may touch live
-# in menil/pr-code-review-action/.github/workflows/implement.yml, so this file does not change
+# in menil/issue-and-pr-agent-actions/.github/workflows/implement.yml, so this file does not change
 # when they do: only the version in the `uses:` line below does.
 name: Implement issue
 
@@ -32,10 +32,10 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-    # EDIT: pin this to the full commit of a release of menil/pr-code-review-action, with the
+    # EDIT: pin this to the full commit of a release of menil/issue-and-pr-agent-actions, with the
     # release in a comment, as for any workflow that is handed a token. Dependabot can then
     # bump it.
-    uses: menil/pr-code-review-action/.github/workflows/implement.yml@v1
+    uses: menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@v1
     with:
       # The repository variables AGENT_AUTO ('true' lets your own new issues start a run) and
       # AGENT_DAILY_CAP (assessments per 24 hours; 5 if empty, 0 pauses everything).

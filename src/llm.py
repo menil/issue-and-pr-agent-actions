@@ -360,7 +360,7 @@ def openrouter_chat(
     model: str = "openrouter/free",
     base_url: str = "https://openrouter.ai/api/v1/chat/completions",
     max_tokens: int = 4096,
-    repo: str = "pr-code-review-action",
+    repo: str = "issue-and-pr-agent-actions",
     what: str = "review",
 ) -> str:
     """Send a system prompt and a user message to OpenRouter and return the reply text.

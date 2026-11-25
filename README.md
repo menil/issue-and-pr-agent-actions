@@ -1,13 +1,23 @@
-# AI PR Code Reviewer Action
+# Issue and PR agent actions
 
-An automated Pull Request code reviewer powered by OpenRouter language models (like Gemini, Llama) or the Anthropic API (Claude) directly. Submits both high-level summaries and line-by-line inline review comments directly to GitHub PRs.
+GitHub Actions that put an AI agent to work on a repository's pull requests and issues. They run on a Claude subscription token, and review and triage can fall back to free OpenRouter models, so there is no pay-per-token key to manage (the implementation stage uses the Claude token only). The model only ever returns a verdict or some text; code decides every label, comment, branch and commit, from fixed tables and a sanitiser, and a person reviews and merges everything.
+
+| Tool | What it does | Use it as |
+|------|--------------|-----------|
+| **[Pull request review](#features)** | Reads a pull request's diff and posts a summary and inline comments on the lines that changed. | `menil/issue-and-pr-agent-actions@v1` |
+| **[Issue triage](#issue-triage)** | Labels a newly opened issue, flags a likely duplicate, and asks once for what is missing. It judges nothing and closes nothing. | `menil/issue-and-pr-agent-actions/triage@v1` |
+| **[Issue implementation](#issue-implementation)** | For an issue a maintainer trusts: assesses it, tries to show the problem with a failing test, fixes it, and opens a pull request for a person to review. The jobs live in one reusable workflow, so a repository's own file is short. | `menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@<commit>` |
+
+They work together: the implementation workflow runs the review on the pull request it opens. Each can be used alone. The design and threat model of each are in [docs/](docs/): [triage](docs/triage-action.md) and [implementation](docs/implement-action.md).
 
 ## Features
+
+The review action:
+
 - Two providers: OpenRouter (dynamic model swapping — Gemini, Llama, etc.) or Anthropic (Claude, via an Anthropic API key or a Claude Pro/Max subscription OAuth token).
 - Line-by-line inline code comments on modified lines only.
 - Strict bug, performance, readability, and security focus.
 - Lightweight, plain Python implementation with zero third-party library dependencies.
-- A second action, [issue triage](#issue-triage), labels newly opened issues and asks for missing information, with the same providers.
 
 ## Usage
 
@@ -32,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Review Action
-        uses: menil/pr-code-review-action@v1
+        uses: menil/issue-and-pr-agent-actions@v1
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -47,7 +57,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/pr-code-review-action@v1
+        uses: menil/issue-and-pr-agent-actions@v1
         with:
           provider: anthropic
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -58,7 +68,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/pr-code-review-action@v1
+        uses: menil/issue-and-pr-agent-actions@v1
         with:
           provider: anthropic
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -72,7 +82,7 @@ Set `provider: anthropic` and supply credentials using **one** of the two method
 
 ```yaml
       - name: Run Review Action
-        uses: menil/pr-code-review-action@v1
+        uses: menil/issue-and-pr-agent-actions@v1
         with:
           provider: auto   # default; optional
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -107,12 +117,12 @@ jobs:
       - name: Checkout Private Review Action
         uses: actions/checkout@v4
         with:
-          repository: your-username/pr-code-review-action
+          repository: your-username/issue-and-pr-agent-actions
           token: ${{ secrets.PAT_WITH_REPO_ACCESS }}
-          path: .github/actions/pr-code-review-action
+          path: .github/actions/issue-and-pr-agent-actions
 
       - name: Run PR Review Action
-        uses: ./.github/actions/pr-code-review-action
+        uses: ./.github/actions/issue-and-pr-agent-actions
         with:
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -138,7 +148,7 @@ jobs:
 
 ## Issue triage
 
-A second action in this repository, `menil/pr-code-review-action/triage`, handles newly opened issues. With one model call it picks a type label (`bug`, `enhancement`, `question` or `documentation`), flags a likely duplicate, and, when a report is too thin to act on, posts one comment asking for what is missing. It is a triage clerk, not an analyst: it does not judge whether an issue is valid, reproducible, hard or worth doing, and it never closes, assigns or prioritises anything. The design and its threat model are in [docs/triage-action.md](docs/triage-action.md). A design for the next stage, an agent that assesses and implements trusted issues as draft pull requests, is in [docs/implement-action.md](docs/implement-action.md); nothing there is built yet.
+A second action in this repository, `menil/issue-and-pr-agent-actions/triage`, handles newly opened issues. With one model call it picks a type label (`bug`, `enhancement`, `question` or `documentation`), flags a likely duplicate, and, when a report is too thin to act on, posts one comment asking for what is missing. It is a triage clerk, not an analyst: it does not judge whether an issue is valid, reproducible, hard or worth doing, and it never closes, assigns or prioritises anything. The design and its threat model are in [docs/triage-action.md](docs/triage-action.md). A design for the next stage, an agent that assesses and implements trusted issues as draft pull requests, is in [docs/implement-action.md](docs/implement-action.md); nothing there is built yet.
 
 > [!NOTE]
 > Available from `v1.1.0`. A workflow pinned to `@v1.0.1` or earlier does not have it.
@@ -163,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Triage the issue
-        uses: menil/pr-code-review-action/triage@v1
+        uses: menil/issue-and-pr-agent-actions/triage@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -215,7 +225,7 @@ The model never merges, approves, labels, or touches `.github/`, lockfiles, hook
    Pin the `uses:` line to the full commit of a release, with the release in a comment, as for any workflow that is handed a token:
 
    ```yaml
-   uses: menil/pr-code-review-action/.github/workflows/implement.yml@<full commit sha> # v1.8.0
+   uses: menil/issue-and-pr-agent-actions/.github/workflows/implement.yml@<full commit sha> # v1.10.0
    ```
 
    That line is all that changes when this repository does: the jobs, the permissions and the guards come with the version. Dependabot's `github-actions` updates bump the line in a pull request, so you do not have to; see [docs/implement-action.md](docs/implement-action.md#a-reusable-workflow) for what that relies on.
@@ -266,15 +276,22 @@ Releases follow [semantic versioning](https://semver.org/). Each release has an 
 - A new major version is needed to remove or rename an input, to require a new secret or permission, or to change the exit code behaviour.
 - Changes to what a posted review looks like, such as the escaping rules described under [Output safety](#output-safety), are not breaking, but the release notes list them.
 
-To cut a release, from an up-to-date `main`:
+To cut a release, from an up-to-date `main` (the steps and the reasons are under "Releasing" in [docs/implement-action.md](docs/implement-action.md#releasing)):
+
+1. If the actions or the shared implementation workflow changed, run `python scripts/pin_implement_actions.py X.Y.Z` in a pull request and merge it, so the workflow names the release it is about to be.
+2. Tag the merge commit, move the floating major tag, and publish the release. Releases are **immutable**: publishing locks the tag, so check the commit first.
 
 ```bash
-git tag -a v1.0.1 -m "v1.0.1"
-git tag -fa v1 -m "v1.0.1"        # move the floating major tag
-git push origin v1.0.1
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git tag -fa v1 -m "v1"            # move the floating major tag
+git push origin vX.Y.Z
 git push --force origin v1
-gh release create v1.0.1 --generate-notes
+gh release create vX.Y.Z --title "vX.Y.Z" --notes-file notes.md --latest --verify-tag
 ```
+
+### Renamed from `pr-code-review-action`
+
+This repository was called `menil/pr-code-review-action` up to `v1.9.0`, when review was its only tool. GitHub does not redirect `uses:` references after a rename, so a workflow that still names the old repository stops working: change it to `menil/issue-and-pr-agent-actions` and move to `v1.10.0` or later. The releases up to `v1.9.0` keep the old name inside their shared workflow and cannot be changed, so they stop working too.
 
 ## Development
 

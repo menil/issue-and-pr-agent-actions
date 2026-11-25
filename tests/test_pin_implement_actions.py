@@ -18,11 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      - uses: menil/pr-code-review-action/implement/assess@v1.7.0
-      - uses: menil/pr-code-review-action/implement/fix@v1.7.0
-      - uses: menil/pr-code-review-action@v1.7.0
+      - uses: menil/issue-and-pr-agent-actions/implement/assess@v1.7.0
+      - uses: menil/issue-and-pr-agent-actions/implement/fix@v1.7.0
+      - uses: menil/issue-and-pr-agent-actions@v1.7.0
       - name: other
-        run: echo menil/pr-code-review-action/implement/assess@v1.7.0
+        run: echo menil/issue-and-pr-agent-actions/implement/assess@v1.7.0
 """
 
 
@@ -30,8 +30,8 @@ def test_every_call_to_this_repositorys_actions_gets_the_new_version() -> None:
     text, count = pin.pin(SAMPLE, "1.8.0")
     assert count == 3
     assert text.count("@v1.8.0") == 3 and "@v1.7.0" in text  # the one in `run:` stays
-    assert "uses: menil/pr-code-review-action/implement/assess@v1.8.0" in text
-    assert "uses: menil/pr-code-review-action@v1.8.0" in text
+    assert "uses: menil/issue-and-pr-agent-actions/implement/assess@v1.8.0" in text
+    assert "uses: menil/issue-and-pr-agent-actions@v1.8.0" in text
 
 
 def test_other_actions_are_left_alone() -> None:
@@ -44,7 +44,7 @@ def test_other_actions_are_left_alone() -> None:
 
 def test_text_that_only_mentions_an_action_is_left_alone() -> None:
     text, _ = pin.pin(SAMPLE, "1.8.0")
-    assert "echo menil/pr-code-review-action/implement/assess@v1.7.0" in text
+    assert "echo menil/issue-and-pr-agent-actions/implement/assess@v1.7.0" in text
 
 
 def test_pinning_twice_changes_nothing_more() -> None:
@@ -91,7 +91,7 @@ def test_the_command_line_rewrites_the_file(
     target = tmp_path / "implement.yml"
     target.write_text(SAMPLE, encoding="utf-8")
     assert pin.main(["1.8.0", str(target)]) == 0
-    assert "uses: menil/pr-code-review-action@v1.8.0" in target.read_text()
+    assert "uses: menil/issue-and-pr-agent-actions@v1.8.0" in target.read_text()
     assert "3" in capsys.readouterr().out
 
 

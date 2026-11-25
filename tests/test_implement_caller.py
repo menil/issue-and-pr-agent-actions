@@ -114,7 +114,7 @@ def test_no_permission_can_touch_workflows_or_mint_tokens() -> None:
 
 def test_it_calls_the_shared_workflow_of_this_repository() -> None:
     assert re.search(
-        r"(?m)^    uses: menil/pr-code-review-action/\.github/workflows/implement\.yml@\S+$",
+        r"(?m)^    uses: menil/issue-and-pr-agent-actions/\.github/workflows/implement\.yml@\S+$",
         CALLER,
     )
 
