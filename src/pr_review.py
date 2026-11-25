@@ -539,7 +539,7 @@ def make_openrouter_request(
     model: str = "openrouter/free",
     base_url: str = "https://openrouter.ai/api/v1/chat/completions",
     max_tokens: int = 4096,
-    repo: str = "pr-code-review-action",
+    repo: str = "issue-and-pr-agent-actions",
 ) -> str:
     """Call OpenRouter API to review the diff content using the specified model."""
     return openrouter_chat(

@@ -291,7 +291,7 @@ def test_every_action_it_calls_is_pinned_to_one_exact_release() -> None:
     """A file cannot name its own commit, so the actions inside are named by the release
     tag this file ships in, and a release's tag is locked. They must all agree, or one stage
     would run another release's code."""
-    refs = set(re.findall(r"uses: menil/pr-code-review-action[\w/]*@(\S+)", TEXT))
+    refs = set(re.findall(r"uses: menil/issue-and-pr-agent-actions[\w/]*@(\S+)", TEXT))
     assert len(refs) == 1, refs
     (ref,) = refs
     assert re.fullmatch(r"v\d+\.\d+\.\d+", ref), ref
@@ -340,7 +340,7 @@ def test_the_inputs_it_passes_exist_and_the_required_ones_are_all_there(
 
 @pytest.mark.parametrize("name", JOBS)
 def test_it_calls_this_repositorys_action_for_each_job(name: str) -> None:
-    assert f"uses: menil/pr-code-review-action/implement/{name}@" in _job(name)
+    assert f"uses: menil/issue-and-pr-agent-actions/implement/{name}@" in _job(name)
 
 
 # --- the daily limit and the failure comment ---
@@ -498,14 +498,14 @@ def test_the_review_checks_out_nothing_and_never_runs_the_pull_requests_code() -
 
 def test_the_review_calls_this_repositorys_review_action_with_the_number() -> None:
     job = _job("review")
-    assert "uses: menil/pr-code-review-action@v1" in job
+    assert "uses: menil/issue-and-pr-agent-actions@v1" in job
     assert "pull_request_number: ${{ steps.pr.outputs.number }}" in job
     assert "claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in job
 
 
 def test_every_input_the_review_step_passes_is_one_the_review_action_declares() -> None:
     action = (ROOT / "action.yml").read_text(encoding="utf-8")
-    step = _job("review").split("pr-code-review-action@v1", 1)[1]
+    step = _job("review").split("issue-and-pr-agent-actions@v1", 1)[1]
     passed = set(re.findall(r"(?m)^          (\w+):", step))
     assert passed and passed <= _declared_inputs(action), passed - _declared_inputs(
         action
@@ -640,6 +640,6 @@ def test_every_third_party_action_is_pinned_to_a_full_commit() -> None:
     """Only this repository's actions (named by release) and GitHub's own may be named by a
     tag; anything else that is handed the job's token or the checkout is pinned by commit."""
     for owner_repo, ref in re.findall(r"(?m)^\s+(?:- )?uses: ([\w./-]+)@(\S+)", TEXT):
-        if owner_repo.startswith(("menil/pr-code-review-action", "actions/")):
+        if owner_repo.startswith(("menil/issue-and-pr-agent-actions", "actions/")):
             continue
         assert re.fullmatch(r"[0-9a-f]{40}", ref), (owner_repo, ref)

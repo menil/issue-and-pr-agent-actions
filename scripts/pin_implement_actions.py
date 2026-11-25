@@ -18,7 +18,7 @@ DEFAULT_PATH = (
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 # `uses:` at the start of a step (optionally `- uses:`), not text that merely mentions it.
 USES = re.compile(
-    r"(?m)^(?P<head>\s*(?:-\s+)?uses:\s+menil/pr-code-review-action(?:/[\w./-]+)?@)\S+"
+    r"(?m)^(?P<head>\s*(?:-\s+)?uses:\s+menil/issue-and-pr-agent-actions(?:/[\w./-]+)?@)\S+"
 )
 
 

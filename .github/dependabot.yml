@@ -26,8 +26,8 @@ updates:
     # The shared workflow names this repository's own actions by the release it ships in, and
     # scripts/pin_implement_actions.py changes them; Dependabot must not propose its own.
     ignore:
-      - dependency-name: "menil/pr-code-review-action"
-      - dependency-name: "menil/pr-code-review-action/*"
+      - dependency-name: "menil/issue-and-pr-agent-actions"
+      - dependency-name: "menil/issue-and-pr-agent-actions/*"
     schedule:
       interval: "weekly"
     commit-message:

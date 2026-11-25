@@ -9,7 +9,7 @@
 # reproducible; if so, another run writes a fix and opens a pull request, ready for review. A
 # person reviews and merges it. The model never merges, approves or labels.
 #
-# Every `uses: menil/pr-code-review-action...@vX.Y.Z` below names the release this file ships
+# Every `uses: menil/issue-and-pr-agent-actions...@vX.Y.Z` below names the release this file ships
 # in, because a file cannot name its own commit. A release is one that has its tag locked
 # ("immutable releases"), which makes the tag as fixed as a commit. The version is changed in
 # one place, by scripts/pin_implement_actions.py, in the pull request that is released; a test
@@ -121,7 +121,7 @@ jobs:
 
       - name: Assess the issue
         id: assess
-        uses: menil/pr-code-review-action/implement/assess@v1.9.0
+        uses: menil/issue-and-pr-agent-actions/implement/assess@v1.10.0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
@@ -143,14 +143,14 @@ jobs:
       - name: Write the assessment
         id: report
         if: needs.assess.outputs.capped != 'true'
-        uses: menil/pr-code-review-action/implement/report@v1.9.0
+        uses: menil/issue-and-pr-agent-actions/implement/report@v1.10.0
         with:
           issue_number: ${{ github.event.issue.number }}
           verdict: ${{ needs.assess.outputs.verdict }}
 
       - name: Say the daily limit was reached
         if: needs.assess.outputs.capped == 'true'
-        uses: menil/pr-code-review-action/implement/notify@v1.9.0
+        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.10.0
         with:
           issue_number: ${{ github.event.issue.number }}
           kind: capped
@@ -182,7 +182,7 @@ jobs:
 
       - name: Fix the issue and open a pull request
         id: fix
-        uses: menil/pr-code-review-action/implement/fix@v1.9.0
+        uses: menil/issue-and-pr-agent-actions/implement/fix@v1.10.0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
@@ -223,7 +223,7 @@ jobs:
           fi
 
       - name: Review the pull request
-        uses: menil/pr-code-review-action@v1.9.0
+        uses: menil/issue-and-pr-agent-actions@v1.10.0
         with:
           provider: auto
           pull_request_number: ${{ steps.pr.outputs.number }}
@@ -246,7 +246,7 @@ jobs:
       issues: write
     steps:
       - name: Tidy the issue
-        uses: menil/pr-code-review-action/implement/finish@v1.9.0
+        uses: menil/issue-and-pr-agent-actions/implement/finish@v1.10.0
         with:
           issue_number: ${{ github.event.issue.number }}
           outcome: ${{ needs.fix.outputs.outcome }}
@@ -262,7 +262,7 @@ jobs:
       issues: write
     steps:
       - name: Say the run failed
-        uses: menil/pr-code-review-action/implement/notify@v1.9.0
+        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.10.0
         with:
           issue_number: ${{ github.event.issue.number }}
           kind: failed

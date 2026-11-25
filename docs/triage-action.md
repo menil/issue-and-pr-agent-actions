@@ -26,7 +26,7 @@ there are real outside issues to look at.
 
 | | Decision |
 |---|---|
-| Location | A second action in this repo: `triage/action.yml`, used as `menil/pr-code-review-action/triage@v1`. It shares the sanitizer and the provider cascade with the review action instead of copying them. |
+| Location | A second action in this repo: `triage/action.yml`, used as `menil/issue-and-pr-agent-actions/triage@v1`. It shares the sanitizer and the provider cascade with the review action instead of copying them. |
 | Scope | Every new issue except those opened by bots, and except any that already carries a triage label or `no-triage`. |
 | Output | Labels, plus at most one comment, only to ask for missing information. |
 

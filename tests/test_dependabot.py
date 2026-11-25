@@ -32,5 +32,5 @@ def test_every_directory_with_an_action_file_is_looked_at() -> None:
 
 def test_its_own_actions_are_not_proposed_for_a_bump() -> None:
     ignore = _actions_block().split("ignore:", 1)[1].split("schedule:")[0]
-    assert 'dependency-name: "menil/pr-code-review-action"' in ignore
-    assert 'dependency-name: "menil/pr-code-review-action/*"' in ignore
+    assert 'dependency-name: "menil/issue-and-pr-agent-actions"' in ignore
+    assert 'dependency-name: "menil/issue-and-pr-agent-actions/*"' in ignore
