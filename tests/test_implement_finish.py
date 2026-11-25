@@ -10,6 +10,8 @@ from pathlib import Path
 import implement
 import pytest
 from implement import (
+    denied_commands,
+    stop_reason,
     NEEDS_HUMAN_COLOR,
     NEEDS_HUMAN_DESCRIPTION,
     NEEDS_HUMAN_LABEL,
@@ -449,6 +451,36 @@ def test_a_long_reason_is_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert len(_comment(api)) < 4000
 
 
+def test_a_cut_reason_says_so_once_and_in_one_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It was cut in the fix action already; the comment must not cut it a second time or
+    add the sanitiser's own marker, so the quote ends with a single ellipsis."""
+    cut = stop_reason("word " * 5000)
+    _, api = _stopped(tmp_path, monkeypatch, reason=cut)
+    quote = next(line for line in _comment(api).splitlines() if line.startswith("> "))
+    assert quote == f"> {cut}" and quote.endswith("word…")
+    assert "_(truncated)_" not in _comment(api)
+
+
+def test_a_reason_that_arrives_too_long_is_cut_with_an_ellipsis_here_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, api = _stopped(tmp_path, monkeypatch, reason="word " * 5000)
+    quote = next(line for line in _comment(api).splitlines() if line.startswith("> "))
+    assert quote.endswith("…") and "_(truncated)_" not in _comment(api)
+
+
+def test_a_cut_command_keeps_its_ellipsis_and_is_not_cut_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = "Bash: " + "z" * 94 + "…"
+    assert len(entry) == 101 or len(entry) <= implement.MAX_DENIED_CHARS + 1
+    cut = denied_commands(_result_for_finish(entry_command="z" * 5000))[0]
+    _, api = _stopped(tmp_path, monkeypatch, denied=json.dumps([cut]))
+    assert f"`{cut}`" in _comment(api)
+
+
 @pytest.mark.parametrize(
     "bad", ["not json", "{}", "null", '"x"', "[1, null]", '[{"a": 1}]', "[" * 50]
 )
@@ -487,3 +519,24 @@ def test_the_reason_and_denials_are_ignored_when_a_pull_request_was_opened(
     )
     assert code == 0
     assert "ignored" not in _comment(api) and "Bash: x" not in _comment(api)
+
+
+def _result_for_finish(entry_command: str) -> str:
+    return json.dumps(
+        [
+            {
+                "type": "result",
+                "permission_denials": [
+                    {"tool_name": "Bash", "tool_input": {"command": entry_command}}
+                ],
+            }
+        ]
+    )
+
+
+def test_a_command_that_arrives_too_long_is_cut_with_an_ellipsis_here_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, api = _stopped(tmp_path, monkeypatch, denied=json.dumps(["Bash: " + "z" * 5000]))
+    body = _comment(api)
+    assert "…`" in body and "z" * 200 not in body

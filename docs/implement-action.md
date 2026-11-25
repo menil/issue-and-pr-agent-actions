@@ -309,7 +309,7 @@ and the action also reads which tool calls the model was refused from the execut
 refused `uv run pytest` is a likely reason it could not show the problem). Both come from the
 model, which an outsider's issue text can steer, so they are handled as untrusted:
 
-- In the fix action they are collapsed to **one line** and capped (600 characters for the reason;
+- In the fix action they are collapsed to **one line** and capped (1000 characters for the reason;
   at most 5 commands of 100 characters, with backticks replaced). One line matters: a newline
   in a job output would let a value write another output. Nothing is printed raw to the log; the
   refused commands are printed through `log_text`, so no line can start a workflow command.

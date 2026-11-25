@@ -802,7 +802,7 @@ def opened_comment(pull_request: int) -> str:
 # outsider's issue text can steer, so they are cut down before they travel (to one line:
 # a newline in a job output would let a value write another output) and made safe before
 # they are posted.
-MAX_STOP_REASON_CHARS = 600
+MAX_STOP_REASON_CHARS = 1000
 MAX_STOP_FILE_CHARS = 20_000
 MAX_EXECUTION_BYTES = 20_000_000
 MAX_DENIED_SHOWN = 5
@@ -813,10 +813,27 @@ def _one_line(text: str) -> str:
     return " ".join(strip_invisible_chars(text).split())
 
 
+def _cut(text: str, limit: int) -> str:
+    """The text as it is if it fits; otherwise cut to at most `limit` characters, ending in an
+    ellipsis, so a reader can tell it was cut. It backs up to the last space only if that is
+    near the end (within the last fifth), so one long word is cut hard instead of costing
+    almost everything before it. Cutting what is already cut changes nothing."""
+    if len(text) <= limit:
+        return text
+    # The ellipsis takes one character, so keep `limit - 1`. The first character left out is
+    # text[limit - 1]: if it is a space the cut already falls between words, and otherwise it
+    # falls inside one, so back up to the last space, but only if that is near the end.
+    head = text[: limit - 1]
+    space = head.rfind(" ")
+    if text[limit - 1] != " " and space >= limit * 0.8:
+        head = head[:space]
+    return head.rstrip(" ,;:-") + "…"
+
+
 def stop_reason(raw: str) -> str:
     """The model's reason for changing nothing, as one capped line with nothing invisible.
     It is not made safe to post here: the comment writer does that, once."""
-    return _one_line(raw)[:MAX_STOP_REASON_CHARS].rstrip()
+    return _cut(_one_line(raw), MAX_STOP_REASON_CHARS)
 
 
 def _denial_text(item: Any) -> str | None:
@@ -831,7 +848,7 @@ def _denial_text(item: Any) -> str | None:
         f"{tool[:30]}: {command}" if isinstance(command, str) and command else tool[:30]
     )
     # No backtick: the comment shows each one as inline code.
-    return _one_line(text).replace("`", "'")[:MAX_DENIED_CHARS].rstrip()
+    return _cut(_one_line(text).replace("`", "'"), MAX_DENIED_CHARS)
 
 
 def _json_messages(raw: str) -> list[Any]:
@@ -917,7 +934,7 @@ def _comment_denied(raw: str) -> list[str]:
     if not isinstance(items, list):
         return []
     cleaned = [
-        _one_line(item).replace("`", "'")[:MAX_DENIED_CHARS].rstrip()
+        _cut(_one_line(item).replace("`", "'"), MAX_DENIED_CHARS)
         for item in items
         if isinstance(item, str)
     ]
