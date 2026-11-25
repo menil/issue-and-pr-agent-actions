@@ -18,6 +18,14 @@ inputs:
     description: "What the fix stage did, as the fix action outputs it: 'opened' (a pull request was opened) or 'no_change' (it changed nothing). Anything else is refused."
     required: false
     default: 'opened'
+  reason:
+    description: "When the outcome is 'no_change': the model's own reason, as the fix action outputs it. It is made safe here, once, and quoted in the comment as unchecked."
+    required: false
+    default: ''
+  denied:
+    description: "When the outcome is 'no_change': the commands the model was refused, as the fix action outputs them (a JSON array of strings). Shown as inline code."
+    required: false
+    default: ''
   pull_request_url:
     description: "The URL of the pull request, as the fix action outputs it. Needed when the outcome is 'opened', and then only the exact form of a pull request of this repository is accepted; not used when nothing changed."
     required: false
@@ -37,5 +45,7 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         ISSUE_NUMBER: ${{ inputs.issue_number }}
         OUTCOME: ${{ inputs.outcome }}
+        REASON: ${{ inputs.reason }}
+        DENIED: ${{ inputs.denied }}
         PULL_REQUEST_URL: ${{ inputs.pull_request_url }}
       run: python ${{ github.action_path }}/../../src/implement.py finish

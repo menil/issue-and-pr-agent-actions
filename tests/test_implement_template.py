@@ -643,3 +643,12 @@ def test_every_third_party_action_is_pinned_to_a_full_commit() -> None:
         if owner_repo.startswith(("menil/issue-and-pr-agent-actions", "actions/")):
             continue
         assert re.fullmatch(r"[0-9a-f]{40}", ref), (owner_repo, ref)
+
+
+def test_the_fix_job_reports_why_it_stopped_and_the_tidy_job_passes_it_on() -> None:
+    for name in ("reason", "denied"):
+        assert re.search(
+            rf"(?m)^      {name}: \$\{{\{{ steps\.fix\.outputs\.{name} \}}\}}",
+            _job("fix"),
+        )
+        assert f"{name}: ${{{{ needs.fix.outputs.{name} }}}}" in _job("finish")

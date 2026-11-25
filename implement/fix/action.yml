@@ -46,6 +46,12 @@ outputs:
   pull_request_url:
     description: 'The pull request that was opened; empty when nothing was changed'
     value: ${{ steps.open.outputs.pull_request_url }}
+  reason:
+    description: "When nothing was changed: the model's own reason, from .agent-stop.md, as one capped line. Untrusted text: whoever uses it must make it safe before posting it. Empty otherwise."
+    value: ${{ steps.open.outputs.reason }}
+  denied:
+    description: "When nothing was changed: the tool calls the model made and was refused, as a JSON array of short one-line strings (never more than a few). Untrusted text. '[]' otherwise."
+    value: ${{ steps.open.outputs.denied }}
   outcome:
     description: "'opened' when a pull request was opened, 'no_change' when the model changed nothing (it could not show the problem with a failing test). A change that must not be committed is an error, not an outcome."
     value: ${{ steps.open.outputs.outcome }}
@@ -103,10 +109,13 @@ runs:
       shell: bash
       env:
         EXECUTION_FILE: ${{ steps.model.outputs.execution_file }}
+        IMPLEMENT: ${{ github.action_path }}/../../src/implement.py
       run: |
-        # Numbers only, never what the model said: it is steered by the issue.
+        # Numbers only, and the commands it was refused, which are cleaned and shown inert:
+        # never what else the model said, because it is steered by the issue.
         jq -sc '[.[] | if type=="array" then .[] else . end] | map(select(.type? == "result")) | last | {subtype, is_error, num_turns, duration_ms, total_cost_usd}' "$EXECUTION_FILE" \
           || echo "Could not read the execution file."
+        python "$IMPLEMENT" denials || true
 
     - name: Commit, push and open a pull request
       id: open
@@ -116,6 +125,7 @@ runs:
         NUMBER: ${{ inputs.issue_number }}
         BASE_BRANCH: ${{ inputs.base_branch }}
         DRAFT: ${{ inputs.draft }}
+        EXECUTION_FILE: ${{ steps.model.outputs.execution_file }}
         REPO: ${{ github.repository }}
         IMPLEMENT: ${{ github.action_path }}/../../src/implement.py
       run: |
@@ -135,6 +145,9 @@ runs:
         if [ ! -s "$changes" ]; then
           echo "The model made no changes; nothing was committed or opened."
           echo "outcome=no_change" >> "$GITHUB_OUTPUT"
+          # Why, in the model's own words and the commands it was refused, each cut down to one
+          # line. It can never cost the outcome above.
+          python "$IMPLEMENT" stop-report || true
           exit 0
         fi
 

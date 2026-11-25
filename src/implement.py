@@ -32,7 +32,7 @@ import textwrap
 import urllib.error
 import urllib.parse
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -105,6 +105,7 @@ PROTECTED_NAMES = frozenset(
         ".gitattributes",
         ".agent-issue.md",
         ".agent-change.md",
+        ".agent-stop.md",
         "codeowners",
     }
 )
@@ -168,6 +169,7 @@ NOTICES = ("capped", "failed")
 
 ISSUE_FILE = Path(".agent-issue.md")
 CHANGE_FILE = Path(".agent-change.md")
+STOP_FILE = Path(".agent-stop.md")
 EXCLUDE_FILE = Path(".git/info/exclude")
 REPO_PATTERN = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 LOGIN_PATTERN = re.compile(r"[A-Za-z0-9-]+(\[bot\])?")
@@ -796,18 +798,130 @@ def opened_comment(pull_request: int) -> str:
     )
 
 
-def no_change_comment() -> str:
-    """The one comment left when the fix stage changed nothing. It is fixed text: the model's
-    own words are not used, and it does not say the run failed, because it did not."""
-    return (
+# What the fix stage says when it changes nothing. Both come from the model, which an
+# outsider's issue text can steer, so they are cut down before they travel (to one line:
+# a newline in a job output would let a value write another output) and made safe before
+# they are posted.
+MAX_STOP_REASON_CHARS = 600
+MAX_STOP_FILE_CHARS = 20_000
+MAX_EXECUTION_BYTES = 20_000_000
+MAX_DENIED_SHOWN = 5
+MAX_DENIED_CHARS = 100
+
+
+def _one_line(text: str) -> str:
+    return " ".join(strip_invisible_chars(text).split())
+
+
+def stop_reason(raw: str) -> str:
+    """The model's reason for changing nothing, as one capped line with nothing invisible.
+    It is not made safe to post here: the comment writer does that, once."""
+    return _one_line(raw)[:MAX_STOP_REASON_CHARS].rstrip()
+
+
+def _denial_text(item: Any) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    tool = item.get("tool_name")
+    if not isinstance(tool, str) or not _one_line(tool):
+        return None
+    tool_input = item.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    text = (
+        f"{tool[:30]}: {command}" if isinstance(command, str) and command else tool[:30]
+    )
+    # No backtick: the comment shows each one as inline code.
+    return _one_line(text).replace("`", "'")[:MAX_DENIED_CHARS].rstrip()
+
+
+def _json_messages(raw: str) -> list[Any]:
+    """The messages of an execution file: one JSON array, or one message per line."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = []
+        for line in raw.splitlines():
+            try:
+                data.append(json.loads(line))
+            except ValueError:
+                continue
+    return data if isinstance(data, list) else [data]
+
+
+def denied_commands(raw: str) -> list[str]:
+    """The tool calls the model made and was refused, from the execution file: each as
+    `Tool: command` on one line, without repeats, and only the first few."""
+    found: list[str] = []
+    for message in _json_messages(raw):
+        denials = (
+            message.get("permission_denials") if isinstance(message, dict) else None
+        )
+        for item in denials if isinstance(denials, list) else []:
+            text = _denial_text(item)
+            if text and text not in found:
+                found.append(text)
+    return found[:MAX_DENIED_SHOWN]
+
+
+def _read_denied(path: str) -> list[str]:
+    try:
+        if not path or os.path.getsize(path) > MAX_EXECUTION_BYTES:
+            return []
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return denied_commands(f.read())
+    except OSError:
+        return []
+
+
+def no_change_comment(reason: str = "", denied: Sequence[str] = ()) -> str:
+    """The one comment left when the fix stage changed nothing. It does not say the run failed,
+    because it did not. The words are fixed, except the model's own reason (quoted, and said
+    to be unchecked) and the commands it was refused (as inline code); both are passed in
+    already cleaned."""
+    parts = [
         "The agent worked on this issue and made no changes. It only changes code once it "
         "can show the problem with a failing test, for the reason the issue gives; here it "
         "could not, or it found the issue was not what it said. Nothing was committed or "
-        "opened, and a person should take it from here.\n\n"
+        "opened, and a person should take it from here."
+    ]
+    if reason:
+        parts.append(
+            "Its own reason, written by the model (shown as quoted text; it is not "
+            f"checked):\n\n> {reason}"
+        )
+    if denied:
+        shown = ", ".join(f"`{command}`" for command in denied)
+        parts.append(
+            f"Commands it tried to run and was not allowed to: {shown}. The commands the "
+            "model may run are named in the workflow."
+        )
+    parts.append(
         "To try it again anyway, remove its `repro:` labels and `needs-human`, delete the "
-        "assessment comment, and apply `ready-to-implement` again.\n\n"
-        f"{NO_CHANGE_MARKER}"
+        "assessment comment, and apply `ready-to-implement` again."
     )
+    parts.append(NO_CHANGE_MARKER)
+    return "\n\n".join(parts)
+
+
+def _comment_reason(raw: str) -> str:
+    one = stop_reason(raw)
+    safe = sanitize_or_drop(one, MAX_STOP_REASON_CHARS, "the reason") if one else ""
+    return " ".join((safe or "").split())
+
+
+def _comment_denied(raw: str) -> list[str]:
+    try:
+        items = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    if not isinstance(items, list):
+        return []
+    cleaned = [
+        _one_line(item).replace("`", "'")[:MAX_DENIED_CHARS].rstrip()
+        for item in items
+        if isinstance(item, str)
+    ]
+    return [item for item in cleaned if item][:MAX_DENIED_SHOWN]
 
 
 def pull_request_number(url: str, repo: str) -> int:
@@ -863,6 +977,7 @@ def run_fetch() -> None:
     write_issue_file(issue_markdown(issue))
     # The model writes this one later; it must be ignored before it exists.
     keep_out_of_commits(CHANGE_FILE.name)
+    keep_out_of_commits(STOP_FILE.name)
     print(f"Read issue #{issue.number}.")
 
 
@@ -1034,7 +1149,10 @@ def run_finish() -> None:
             number,
             (NEEDS_HUMAN_LABEL, NEEDS_HUMAN_COLOR, NEEDS_HUMAN_DESCRIPTION),
             NO_CHANGE_MARKER,
-            no_change_comment(),
+            no_change_comment(
+                _comment_reason(os.environ.get("REASON", "")),
+                _comment_denied(os.environ.get("DENIED", "")),
+            ),
         )
         print(f"Tidied #{number}: the agent changed nothing.")
         return
@@ -1118,6 +1236,30 @@ def run_check_changes() -> None:
     print(f"{len(paths)} changed file(s); none is protected.")
 
 
+def run_stop_report() -> None:
+    """For a fix stage that changed nothing: write the model's reason and the commands it was
+    refused as step outputs, each on one line. It can never fail the step: whatever goes wrong
+    reading them, the outcome stands and the comment is the plain one."""
+    reason = ""
+    try:
+        with open(STOP_FILE, encoding="utf-8", errors="replace") as f:
+            reason = stop_reason(f.read(MAX_STOP_FILE_CHARS))
+    except OSError:
+        pass
+    denied = _read_denied(os.environ.get("EXECUTION_FILE", ""))
+    _set_output("reason", reason)
+    _set_output("denied", json.dumps(denied))
+    print(f"A reason of {len(reason)} characters; {len(denied)} command(s) refused.")
+    for item in denied:
+        print(f"Refused: {log_text(item)}")
+
+
+def run_denials() -> None:
+    """Print the commands the model was refused, for the log. Never what else it said."""
+    for item in _read_denied(os.environ.get("EXECUTION_FILE", "")):
+        print(f"Refused: {log_text(item)}")
+
+
 COMMANDS = {
     "fetch": run_fetch,
     "schema": run_schema,
@@ -1126,6 +1268,8 @@ COMMANDS = {
     "check-tools": run_check_tools,
     "check-cap": run_check_cap,
     "finish": run_finish,
+    "stop-report": run_stop_report,
+    "denials": run_denials,
 }
 
 

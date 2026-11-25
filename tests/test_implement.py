@@ -177,7 +177,13 @@ def test_characters_a_reader_cannot_see_are_removed() -> None:
 
 
 def test_the_description_file_is_a_protected_name_wherever_it_is() -> None:
-    for path in (".agent-change.md", "docs/.agent-change.md", ".AGENT-CHANGE.md"):
+    for path in (
+        ".agent-change.md",
+        "docs/.agent-change.md",
+        ".AGENT-CHANGE.md",
+        ".agent-stop.md",
+        "docs/.agent-stop.md",
+    ):
         assert implement.check_changes([path]), path
 
 
@@ -598,6 +604,7 @@ def test_fetch_keeps_both_agent_files_out_of_any_commit(
     assert code == 0
     ignored = (tmp_path / ".git" / "info" / "exclude").read_text().splitlines()
     assert ".agent-issue.md" in ignored and ".agent-change.md" in ignored
+    assert ".agent-stop.md" in ignored
     assert not (tmp_path / ".agent-change.md").exists()
 
 

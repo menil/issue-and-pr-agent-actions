@@ -303,6 +303,24 @@ link) is still an error, because that is the model going somewhere it should not
   person should take it from here, and how to try again anyway. The text is fixed and never says
   the run failed; nothing the model wrote is used, and no URL is needed.
 
+**Saying why.** "Made no changes" was not enough: a person then had to redo the investigation. So
+the fix stage is asked to write `.agent-stop.md` when it changes nothing, a few sentences of why,
+and the action also reads which tool calls the model was refused from the execution file (a
+refused `uv run pytest` is a likely reason it could not show the problem). Both come from the
+model, which an outsider's issue text can steer, so they are handled as untrusted:
+
+- In the fix action they are collapsed to **one line** and capped (600 characters for the reason;
+  at most 5 commands of 100 characters, with backticks replaced). One line matters: a newline
+  in a job output would let a value write another output. Nothing is printed raw to the log; the
+  refused commands are printed through `log_text`, so no line can start a workflow command.
+  Reading them can never fail the step.
+- `finish` treats what it is handed as untrusted again and makes the reason safe, once, with the
+  sanitiser the assessment comment uses (no mention, link, image, HTML or hidden text survives),
+  and quotes it in the comment, labelled as the model's and unchecked. The commands are shown
+  as inline code. The rest of the comment is still fixed text.
+
+The full model output is still not shown: it is the thing this design keeps out of a public log.
+
 `failure()` is true only when a stage fails, so a run that ends this way does not make `notify`
 comment. The assessment's `repro:` label stays, so the issue is not assessed again by accident.
 
