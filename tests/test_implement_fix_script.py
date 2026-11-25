@@ -5,6 +5,7 @@ with a local bare repository as its remote and a stub `gh`. What it must refuse 
 a change under .github/, a lockfile, no change at all, an odd issue number, or a branch that
 already exists must stop it before anything is pushed or any pull request is opened."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -85,7 +86,7 @@ class Sandbox:
         # What `fetch` does: the issue file exists but can never be committed.
         (self.work / ".git" / "info").mkdir(exist_ok=True)
         with open(self.work / ".git" / "info" / "exclude", "a") as f:
-            f.write(".agent-issue.md\n.agent-change.md\n")
+            f.write(".agent-issue.md\n.agent-change.md\n.agent-stop.md\n")
         self.write(".agent-issue.md", "# the issue\n")
 
     def env(self, **overrides: str) -> dict[str, str]:
@@ -282,6 +283,48 @@ def test_a_description_alone_is_not_a_change(box: Sandbox) -> None:
     assert done.returncode == 0, done.stdout + done.stderr
     assert "outcome=no_change" in box.output.read_text()
     assert box.remote_branches() == ["main"] and box.gh_calls() == []
+
+
+def test_when_nothing_changed_the_reason_and_the_denials_are_reported(
+    box: Sandbox,
+) -> None:
+    box.write(".agent-stop.md", "It needs a decision about TLS defaults.\n")
+    execution = box.root / "exec.json"
+    execution.write_text(
+        json.dumps(
+            [
+                {
+                    "type": "result",
+                    "permission_denials": [
+                        {
+                            "tool_name": "Bash",
+                            "tool_input": {"command": "uv run pytest"},
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+    done = box.run(EXECUTION_FILE=str(execution))
+    assert done.returncode == 0, done.stdout + done.stderr
+    written = box.output.read_text()
+    assert "outcome=no_change" in written
+    assert "reason=It needs a decision about TLS defaults." in written
+    assert 'denied=["Bash: uv run pytest"]' in written
+
+
+def test_a_missing_or_broken_stop_report_never_costs_the_outcome(box: Sandbox) -> None:
+    done = box.run(EXECUTION_FILE=str(box.root / "does-not-exist.json"))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "outcome=no_change" in box.output.read_text()
+
+
+def test_the_stop_file_is_never_committed(box: Sandbox) -> None:
+    box.write("slug.py", "x = 2\n")
+    box.write(".agent-stop.md", "reason\n")
+    assert box.run().returncode == 0
+    tree = box._git(box.work, "ls-tree", "-r", "--name-only", "HEAD")
+    assert ".agent-stop.md" not in tree.split()
 
 
 def test_a_change_that_is_opened_says_so(box: Sandbox) -> None:

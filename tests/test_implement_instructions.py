@@ -132,7 +132,7 @@ def test_the_assessment_cannot_write_anything() -> None:
         "do not run `git`",
         "anything under `.github/`",
         "any lockfile",
-        "do not create files other than the test for your change and `.agent-change.md`",
+        "do not create files other than the test for your change, `.agent-change.md` and `.agent-stop.md`",
         "do not edit `.agent-issue.md`",
         "write a test that shows the problem",
         "it must fail, and for the reason the issue gives",
@@ -154,3 +154,19 @@ def test_both_point_to_the_repository_notes_for_commands(text: str) -> None:
     """The commands differ per repository, so they are not written in the files."""
     assert "repository notes below" in _words(text)
     assert not re.search(r"\b(cargo|npm|yarn|pytest|python3|pip|gradle|mvn)\b", text)
+
+
+def test_the_fix_asks_for_a_reason_when_it_changes_nothing() -> None:
+    flat = _words(FIX)
+    assert "`.agent-stop.md`" in FIX
+    assert "if you change nothing" in flat and "a few sentences" in flat
+    assert "why you could not show the problem with a failing test" in flat
+    assert "a person reads it" in flat
+
+
+def test_the_stop_file_is_not_a_file_the_fix_may_leave_behind_as_a_change() -> None:
+    flat = _words(FIX)
+    assert (
+        "do not create files other than the test for your change, `.agent-change.md` and `.agent-stop.md`"
+        in flat
+    )

@@ -62,8 +62,15 @@ If the file does not follow this form it is ignored and a generic message is use
   done for you afterwards.
 - Do not touch anything under `.github/`, any lockfile, or the configuration of
   dependencies or tools.
-- Do not create files other than the test for your change and `.agent-change.md`.
+- Do not create files other than the test for your change, `.agent-change.md` and `.agent-stop.md`.
 - Do not edit `.agent-issue.md`.
 
-If you cannot fix it, or the issue turns out not to be what it said, change nothing. An
+## When you change nothing
+
+If you cannot fix it, or the issue turns out not to be what it said, change nothing: an
 unchanged repository is the right answer, and it is treated as one.
+
+If you change nothing, write `.agent-stop.md` in the repository root: a few sentences of plain text saying why
+you could not show the problem with a failing test, what you tried, or what a person has to
+decide first. A person reads it, quoted, in a comment on the issue; nothing acts on it. Do not
+repeat the issue. If you made a change, do not write this file.

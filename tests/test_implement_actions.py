@@ -342,3 +342,34 @@ def test_finish_takes_the_outcome_and_the_url_is_only_for_an_opened_pull_request
     assert block and "default: 'opened'" in block.group(1)
     url = re.search(r"(?ms)^  pull_request_url:\n(.*?)(?=^  \w+:\n|^runs:)", action)
     assert url and "required: true" not in url.group(1)
+
+
+def test_the_fix_reports_the_reason_and_the_denials_as_outputs() -> None:
+    action = TEXT["fix"]
+    header = action.split("\nruns:\n", 1)[0]
+    for name in ("reason", "denied"):
+        assert f"  {name}:" in header
+        assert f"value: ${{{{ steps.open.outputs.{name} }}}}" in action
+    script = _fix_script()
+    # Only on the way out when nothing changed, and it can never cost the outcome.
+    empty = script.index("outcome=no_change")
+    assert script.index("stop-report") > empty
+    assert script.index("stop-report") < script.index("exit 0", empty)
+    assert (
+        "stop-report" in script
+        and "|| true" in script[script.index("stop-report") :][:80]
+    )
+
+
+def test_the_step_that_makes_the_report_is_given_the_execution_file() -> None:
+    step = next(s for s in _steps("fix") if "Commit, push and open" in s)
+    assert "EXECUTION_FILE: ${{ steps.model.outputs.execution_file }}" in step
+
+
+def test_finish_takes_the_reason_and_the_denials_as_optional_inputs() -> None:
+    action = TEXT["finish"]
+    step = next(s for s in _steps("finish") if "implement.py finish" in s)
+    for name, env in (("reason", "REASON"), ("denied", "DENIED")):
+        block = re.search(rf"(?ms)^  {name}:\n(.*?)(?=^  \w+:\n|^runs:)", action)
+        assert block and "required: true" not in block.group(1)
+        assert f"{env}: ${{{{ inputs.{name} }}}}" in step

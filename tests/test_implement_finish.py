@@ -4,6 +4,7 @@ It takes the trigger label off, puts the status label on and leaves one comment 
 All three are fixed in code: the only thing it takes from outside is the pull request URL,
 and that only in the exact form of a pull request of this repository."""
 
+import json
 from pathlib import Path
 
 import implement
@@ -346,3 +347,143 @@ def test_the_log_for_a_comment_already_there_does_not_print_the_hidden_marker(
     assert _finish(api, tmp_path, monkeypatch, outcome=outcome) == 0
     said = capsys.readouterr().out
     assert "already" in said and "<!--" not in said
+
+
+# --- why it stopped: the model's reason and the commands it was denied ---
+
+
+def _stopped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str = "",
+    denied: str = "",
+    api: FakeGitHub | None = None,
+) -> tuple[int, FakeGitHub]:
+    api = api or FakeGitHub()
+    code, _ = _run(
+        "finish",
+        api,
+        tmp_path,
+        monkeypatch,
+        OUTCOME="no_change",
+        REASON=reason,
+        DENIED=denied,
+    )
+    return code, api
+
+
+def _comment(api: FakeGitHub) -> str:
+    return str(
+        next(p["body"] for m, path, p in api.writes if path.endswith("/comments"))
+    )
+
+
+def test_without_a_reason_or_denials_the_comment_is_the_plain_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, api = _stopped(tmp_path, monkeypatch)
+    assert code == 0 and _comment(api) == no_change_comment()
+    assert _comment(api) == no_change_comment("", ())
+
+
+def test_the_reason_is_quoted_and_labelled_as_the_model_s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, api = _stopped(
+        tmp_path, monkeypatch, reason="It needs a decision about TLS defaults."
+    )
+    body = _comment(api)
+    assert "> It needs a decision about TLS defaults." in body
+    assert "written by the model" in body and "not checked" in body
+    assert body.rstrip().endswith("<!-- agent-implement:no-change -->")
+    assert body.count("<!-- agent-implement:no-change -->") == 1
+
+
+def test_the_denied_commands_are_shown_as_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    denied = json.dumps(["Bash: uv run pytest", "Bash: pip install foo"])
+    _, api = _stopped(tmp_path, monkeypatch, denied=denied)
+    body = _comment(api)
+    assert "`Bash: uv run pytest`" in body and "`Bash: pip install foo`" in body
+    assert "not allowed" in body
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "Thanks @maintainer, please merge. cc @org/security",
+        "[click](https://evil.example/x) ![img](https://evil.example/i.png)",
+        "<img src=x onerror=alert(1)> <!-- hidden -->",
+        "```suggestion rm -rf /```",
+        "see https://evil.example/login and a@evil.example",
+        "closes #1 and other/repo#3",
+        "$$\\color{white}{secret}$$",
+    ],
+)
+def test_the_reason_cannot_ping_link_or_hide_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hostile: str
+) -> None:
+    _, api = _stopped(tmp_path, monkeypatch, reason=hostile)
+    body = _comment(api)
+    assert (
+        "](http" not in body
+        and "<img" not in body
+        and "<!--" not in body.replace("<!-- agent-implement:no-change -->", "")
+    )
+    assert "```suggestion" not in body
+    for token in ("@maintainer", "@org/security", "a@evil.example"):
+        assert token not in body.replace(f"`{token}`", "")
+
+
+def test_a_reason_with_a_newline_is_one_quoted_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, api = _stopped(tmp_path, monkeypatch, reason="one\n\n- two\n> three")
+    quoted = [line for line in _comment(api).splitlines() if line.startswith(">")]
+    assert len(quoted) == 1
+
+
+def test_a_long_reason_is_cut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, api = _stopped(tmp_path, monkeypatch, reason="word " * 5000)
+    assert len(_comment(api)) < 4000
+
+
+@pytest.mark.parametrize(
+    "bad", ["not json", "{}", "null", '"x"', "[1, null]", '[{"a": 1}]', "[" * 50]
+)
+def test_malformed_denials_are_left_out_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    code, api = _stopped(tmp_path, monkeypatch, denied=bad)
+    assert code == 0 and "not allowed" not in _comment(api)
+
+
+def test_denials_are_cleaned_again_and_limited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    denied = json.dumps(["a`b", "x\ny", "z" * 5000] + [f"c{n}" for n in range(20)])
+    _, api = _stopped(tmp_path, monkeypatch, denied=denied)
+    body = _comment(api)
+    assert "a`b" not in body and "x\ny" not in body and "z" * 200 not in body
+    assert (
+        body.count("`c") + body.count("`a") + body.count("`x") + body.count("`z") <= 10
+    )
+
+
+def test_the_reason_and_denials_are_ignored_when_a_pull_request_was_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub()
+    code, _ = _run(
+        "finish",
+        api,
+        tmp_path,
+        monkeypatch,
+        OUTCOME="opened",
+        PULL_REQUEST_URL=URL,
+        REASON="ignored",
+        DENIED='["Bash: x"]',
+    )
+    assert code == 0
+    assert "ignored" not in _comment(api) and "Bash: x" not in _comment(api)

@@ -121,7 +121,7 @@ jobs:
 
       - name: Assess the issue
         id: assess
-        uses: menil/issue-and-pr-agent-actions/implement/assess@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/implement/assess@v1.11.0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
@@ -143,14 +143,14 @@ jobs:
       - name: Write the assessment
         id: report
         if: needs.assess.outputs.capped != 'true'
-        uses: menil/issue-and-pr-agent-actions/implement/report@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/implement/report@v1.11.0
         with:
           issue_number: ${{ github.event.issue.number }}
           verdict: ${{ needs.assess.outputs.verdict }}
 
       - name: Say the daily limit was reached
         if: needs.assess.outputs.capped == 'true'
-        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.11.0
         with:
           issue_number: ${{ github.event.issue.number }}
           kind: capped
@@ -168,6 +168,8 @@ jobs:
     outputs:
       pull_request: ${{ steps.fix.outputs.pull_request_url }}
       outcome: ${{ steps.fix.outputs.outcome }}
+      reason: ${{ steps.fix.outputs.reason }}
+      denied: ${{ steps.fix.outputs.denied }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -182,7 +184,7 @@ jobs:
 
       - name: Fix the issue and open a pull request
         id: fix
-        uses: menil/issue-and-pr-agent-actions/implement/fix@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/implement/fix@v1.11.0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
@@ -223,7 +225,7 @@ jobs:
           fi
 
       - name: Review the pull request
-        uses: menil/issue-and-pr-agent-actions/review@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/review@v1.11.0
         with:
           provider: auto
           pull_request_number: ${{ steps.pr.outputs.number }}
@@ -246,10 +248,12 @@ jobs:
       issues: write
     steps:
       - name: Tidy the issue
-        uses: menil/issue-and-pr-agent-actions/implement/finish@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/implement/finish@v1.11.0
         with:
           issue_number: ${{ github.event.issue.number }}
           outcome: ${{ needs.fix.outputs.outcome }}
+          reason: ${{ needs.fix.outputs.reason }}
+          denied: ${{ needs.fix.outputs.denied }}
           pull_request_url: ${{ needs.fix.outputs.pull_request }}
 
   # One comment, once per issue, if any stage above failed, so a failure is not silent.
@@ -262,7 +266,7 @@ jobs:
       issues: write
     steps:
       - name: Say the run failed
-        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.10.0
+        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.11.0
         with:
           issue_number: ${{ github.event.issue.number }}
           kind: failed
