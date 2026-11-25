@@ -576,9 +576,37 @@ def _run_number_step(
 # --- tidying the issue once the pull request is open ---
 
 
-def test_the_issue_is_tidied_only_after_a_fix_that_opened_a_pull_request() -> None:
+def test_the_issue_is_tidied_after_a_fix_that_finished_either_way() -> None:
+    """Whether it opened a pull request or changed nothing, the issue is tidied; when the
+    fix did not finish (it failed, or was never asked to run) nothing is."""
     assert re.search(r"(?m)^    needs: fix$", _job("finish"))
-    assert _condition("finish") == "needs.fix.outputs.pull_request != ''"
+    assert _condition("finish") == "needs.fix.outputs.outcome != ''"
+    for outcome, tidied in (("opened", True), ("no_change", True), ("", False)):
+        context = {"needs": {"fix": {"outputs": {"outcome": outcome}}}}
+        assert bool(evaluate(_condition("finish"), context)) is tidied, outcome
+
+
+def test_the_fix_job_reports_its_outcome() -> None:
+    assert re.search(
+        r"(?m)^      outcome: \$\{\{ steps\.fix\.outputs\.outcome \}\}", _job("fix")
+    )
+
+
+def test_the_tidy_job_passes_the_outcome_and_the_url() -> None:
+    job = _job("finish")
+    assert "outcome: ${{ needs.fix.outputs.outcome }}" in job
+    assert "pull_request_url: ${{ needs.fix.outputs.pull_request }}" in job
+
+
+def test_a_fix_that_changed_nothing_runs_neither_the_review_nor_the_failure_comment() -> (
+    None
+):
+    nothing = {
+        "needs": {"fix": {"outputs": {"outcome": "no_change", "pull_request": ""}}}
+    }
+    assert not evaluate(_condition("review"), nothing)
+    # The failure comment is for a stage that failed: a fix that finished did not.
+    assert _condition("notify") == "failure()"
 
 
 def test_a_failed_tidy_does_not_fail_the_run_or_comment_on_the_issue() -> None:

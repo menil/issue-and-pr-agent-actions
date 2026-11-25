@@ -9,10 +9,14 @@ from pathlib import Path
 import implement
 import pytest
 from implement import (
+    NEEDS_HUMAN_COLOR,
+    NEEDS_HUMAN_DESCRIPTION,
+    NEEDS_HUMAN_LABEL,
     OPENED_LABEL,
     PR_OPEN_COLOR,
     PR_OPEN_DESCRIPTION,
     TRIGGER_LABEL,
+    no_change_comment,
     opened_comment,
 )
 from test_implement import FakeGitHub, _http_error, _run
@@ -25,8 +29,12 @@ def _finish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     url: str = URL,
+    outcome: str | None = None,
 ) -> int:
-    code, _ = _run("finish", api, tmp_path, monkeypatch, PULL_REQUEST_URL=url)
+    env = {"PULL_REQUEST_URL": url}
+    if outcome is not None:
+        env["OUTCOME"] = outcome
+    code, _ = _run("finish", api, tmp_path, monkeypatch, **env)
     return code
 
 
@@ -200,3 +208,141 @@ def test_a_server_error_when_looking_for_the_comment_fails_the_step(
 ) -> None:
     api = FakeGitHub(fail_on=("GET", "/issues/17/comments", _http_error(500)))
     assert _finish(api, tmp_path, monkeypatch) != 0
+
+
+# --- when the model changed nothing ---
+
+
+def _no_change(
+    api: FakeGitHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str = ""
+) -> int:
+    return _finish(api, tmp_path, monkeypatch, url, outcome="no_change")
+
+
+def test_an_issue_the_agent_left_alone_loses_the_trigger_and_gains_needs_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub()
+    assert _no_change(api, tmp_path, monkeypatch) == 0
+    assert ("DELETE", "/issues/17/labels/ready-to-implement") in _writes(api)
+    added = [p for m, path, p in api.writes if path == "/issues/17/labels"]
+    assert added == [{"labels": ["needs-human"]}]
+    assert "pr-open" not in str(api.writes)
+
+
+def test_needs_human_is_created_with_fixed_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub()
+    _no_change(api, tmp_path, monkeypatch)
+    created = [p for m, path, p in api.writes if path == "/labels"]
+    assert created == [
+        {
+            "name": NEEDS_HUMAN_LABEL,
+            "color": NEEDS_HUMAN_COLOR,
+            "description": NEEDS_HUMAN_DESCRIPTION,
+        }
+    ]
+    assert NEEDS_HUMAN_LABEL == "needs-human"
+
+
+def test_the_comment_says_nothing_was_changed_and_a_person_should_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub()
+    _no_change(api, tmp_path, monkeypatch)
+    assert _writes(api)[-1] == ("POST", "/issues/17/comments")
+    body = next(p["body"] for m, path, p in api.writes if path.endswith("/comments"))
+    assert body == no_change_comment()
+    lowered = body.lower()
+    assert "made no changes" in lowered
+    assert "failing test" in lowered
+    assert "nothing was committed or opened" in lowered
+    assert "a person" in lowered
+    assert "failed" not in lowered  # it did not fail; it declined
+    assert body.rstrip().endswith("<!-- agent-implement:no-change -->")
+
+
+def test_the_comment_says_how_to_try_again_anyway() -> None:
+    body = no_change_comment()
+    for part in (
+        "`repro:`",
+        "`needs-human`",
+        "assessment comment",
+        "`ready-to-implement`",
+    ):
+        assert part in body
+
+
+def test_the_no_change_comment_is_left_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub(comments=[{"body": no_change_comment()}])
+    assert _no_change(api, tmp_path, monkeypatch) == 0
+    assert not [w for w in _writes(api) if w[1].endswith("/comments")]
+    assert ("DELETE", "/issues/17/labels/ready-to-implement") in _writes(api)
+
+
+def test_no_change_needs_no_pull_request_url_and_ignores_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for url in ("", URL, "not a url at all"):
+        api = FakeGitHub()
+        assert _no_change(api, tmp_path, monkeypatch, url) == 0
+        assert "pull/99" not in str(api.writes) and "#99" not in str(api.writes)
+
+
+def test_a_pull_request_url_is_still_required_when_one_was_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub()
+    assert _finish(api, tmp_path, monkeypatch, "", outcome="opened") != 0
+    assert api.writes == []
+
+
+def test_the_default_outcome_is_a_pull_request_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeGitHub()
+    assert _finish(api, tmp_path, monkeypatch) == 0  # no OUTCOME set at all
+    assert ("POST", "/issues/17/comments") in _writes(api)
+    assert "pr-open" in str(api.writes)
+
+
+@pytest.mark.parametrize(
+    "outcome", ["", "failed", "No_Change", "no-change", "opened; touch x", "nothing"]
+)
+def test_any_other_outcome_is_refused_before_anything_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    api = FakeGitHub()
+    code, _ = _run(
+        "finish", api, tmp_path, monkeypatch, PULL_REQUEST_URL=URL, OUTCOME=outcome
+    )
+    assert code != 0
+    assert api.writes == []
+
+
+def test_a_missing_url_says_it_is_needed_when_a_pull_request_was_opened(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    api = FakeGitHub()
+    assert _finish(api, tmp_path, monkeypatch, "", outcome="opened") != 0
+    said = capsys.readouterr().out
+    assert "needed when a pull request was opened" in said
+
+
+@pytest.mark.parametrize("outcome", ["opened", "no_change"])
+def test_the_log_for_a_comment_already_there_does_not_print_the_hidden_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcome: str,
+) -> None:
+    told = opened_comment(99) if outcome == "opened" else no_change_comment()
+    api = FakeGitHub(comments=[{"body": told}])
+    assert _finish(api, tmp_path, monkeypatch, outcome=outcome) == 0
+    said = capsys.readouterr().out
+    assert "already" in said and "<!--" not in said
