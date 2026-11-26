@@ -652,3 +652,69 @@ def test_the_fix_job_reports_why_it_stopped_and_the_tidy_job_passes_it_on() -> N
             _job("fix"),
         )
         assert f"{name}: ${{{{ needs.fix.outputs.{name} }}}}" in _job("finish")
+
+
+# --- the repository's own set-up command ---
+#
+# Some repositories need more than Nix to run their tests (uv, just, Node, devenv). The caller
+# gives a command for that. It is the repository's own code, from the workflow file on its default
+# branch, never from an issue; it runs before the model does and gets no secret.
+
+SETUP = "Set up the repository's tools"
+
+
+def test_the_setup_command_is_an_optional_text_input() -> None:
+    block = re.search(
+        r"(?ms)^      setup_command:\n(.*?)(?=^      \w+:\n|^    secrets:)", TEXT
+    )
+    assert block, "no setup_command input"
+    assert "type: string" in block.group(1)
+    assert "default: ''" in block.group(1)
+    assert "required: true" not in block.group(1)
+
+
+@pytest.mark.parametrize("name", ["assess", "fix"])
+def test_the_two_jobs_that_run_the_model_can_run_it(name: str) -> None:
+    step = _step(name, SETUP)
+    assert "if: inputs.setup_command != ''" in step
+    assert "shell: bash" in step
+    assert "SETUP_COMMAND: ${{ inputs.setup_command }}" in step
+    assert 'run: bash -euo pipefail -c "$SETUP_COMMAND"' in step
+
+
+@pytest.mark.parametrize("name", ["assess", "fix"])
+def test_it_runs_after_the_checkout_and_nix_and_before_the_model(name: str) -> None:
+    job = _job(name)
+    positions = [
+        job.index("actions/checkout@"),
+        job.index("name: Install Nix"),
+        job.index(f"name: {SETUP}"),
+        job.index("uses: menil/issue-and-pr-agent-actions/implement/"),
+    ]
+    assert positions == sorted(positions), positions
+
+
+@pytest.mark.parametrize("name", ["report", "review", "finish", "notify"])
+def test_no_other_job_runs_it(name: str) -> None:
+    assert SETUP not in _job(name) and "setup_command" not in _job(name)
+
+
+@pytest.mark.parametrize("name", ["assess", "fix"])
+def test_it_is_given_no_secret_and_no_token(name: str) -> None:
+    step = _step(name, SETUP)
+    assert "secrets." not in step and "github.token" not in step
+    assert "GITHUB_TOKEN" not in step and "CLAUDE" not in step
+
+
+def test_the_input_is_used_only_to_decide_and_to_hand_the_command_over() -> None:
+    """Never in a script's text (a command with a quote in it would be code), only through the
+    environment of the one step that runs it."""
+    code = re.sub(r"#.*", "", TEXT)
+    used = re.findall(r"^\s*(.*inputs\.setup_command.*)$", code, flags=re.M)
+    assert sorted(used) == sorted(
+        [
+            "if: inputs.setup_command != ''",
+            "SETUP_COMMAND: ${{ inputs.setup_command }}",
+        ]
+        * 2
+    )

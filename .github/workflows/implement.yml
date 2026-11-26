@@ -68,6 +68,15 @@ on:
         description: The NIX_PATH to set when install_nix is on.
         type: string
         default: nixpkgs=channel:nixos-unstable
+      setup_command:
+        description: >-
+          A shell command to install what the commands the model may run need (uv, just, Node,
+          devenv), run with bash from the repository root, after the checkout and after Nix if
+          install_nix is on, in the assessment and in the fix. It is your own code, from the
+          workflow file on your default branch and never from an issue, and it gets no secret.
+          A variable it needs to keep (the PATH) can be written to $GITHUB_PATH or $GITHUB_ENV.
+        type: string
+        default: ''
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: The Claude subscription token. Only the model steps see it.
@@ -119,9 +128,16 @@ jobs:
         with:
           nix_path: ${{ inputs.nix_path }}
 
+      - name: Set up the repository's tools
+        if: inputs.setup_command != ''
+        shell: bash
+        env:
+          SETUP_COMMAND: ${{ inputs.setup_command }}
+        run: bash -euo pipefail -c "$SETUP_COMMAND"
+
       - name: Assess the issue
         id: assess
-        uses: menil/issue-and-pr-agent-actions/implement/assess@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/implement/assess@v1.13.0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
@@ -143,14 +159,14 @@ jobs:
       - name: Write the assessment
         id: report
         if: needs.assess.outputs.capped != 'true'
-        uses: menil/issue-and-pr-agent-actions/implement/report@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/implement/report@v1.13.0
         with:
           issue_number: ${{ github.event.issue.number }}
           verdict: ${{ needs.assess.outputs.verdict }}
 
       - name: Say the daily limit was reached
         if: needs.assess.outputs.capped == 'true'
-        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.13.0
         with:
           issue_number: ${{ github.event.issue.number }}
           kind: capped
@@ -182,9 +198,16 @@ jobs:
         with:
           nix_path: ${{ inputs.nix_path }}
 
+      - name: Set up the repository's tools
+        if: inputs.setup_command != ''
+        shell: bash
+        env:
+          SETUP_COMMAND: ${{ inputs.setup_command }}
+        run: bash -euo pipefail -c "$SETUP_COMMAND"
+
       - name: Fix the issue and open a pull request
         id: fix
-        uses: menil/issue-and-pr-agent-actions/implement/fix@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/implement/fix@v1.13.0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           issue_number: ${{ github.event.issue.number }}
@@ -225,7 +248,7 @@ jobs:
           fi
 
       - name: Review the pull request
-        uses: menil/issue-and-pr-agent-actions/review@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/review@v1.13.0
         with:
           provider: auto
           pull_request_number: ${{ steps.pr.outputs.number }}
@@ -248,7 +271,7 @@ jobs:
       issues: write
     steps:
       - name: Tidy the issue
-        uses: menil/issue-and-pr-agent-actions/implement/finish@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/implement/finish@v1.13.0
         with:
           issue_number: ${{ github.event.issue.number }}
           outcome: ${{ needs.fix.outputs.outcome }}
@@ -266,7 +289,7 @@ jobs:
       issues: write
     steps:
       - name: Say the run failed
-        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.12.0
+        uses: menil/issue-and-pr-agent-actions/implement/notify@v1.13.0
         with:
           issue_number: ${{ github.event.issue.number }}
           kind: failed
