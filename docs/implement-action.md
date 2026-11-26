@@ -214,6 +214,29 @@ ready for review. Set `draft: 'true'` on the step to get the old behaviour. The 
 checked to be exactly `true` or `false` before anything is pushed. The notice in the pull
 request text no longer says "as a draft", because whether it is one is the workflow's choice.
 
+## Setting up the repository's tools
+
+The model may only run the commands the caller names, and they need their tools. Nix covers a
+repository whose tests run in a Nix shell (`install_nix`). Others need more: a prebuilt image in
+their own CI, `uv` and a pinned Python, `just`, Node, `devenv`. A reusable workflow cannot take
+steps from its caller, and the first thing tried, an image, cannot be passed in either, so the
+caller gives `setup_command`: a shell command, run with `bash -euo pipefail` from the repository
+root, after the checkout and Nix, in the assessment and in the fix, before the model.
+
+- **Whose code it is.** The repository's own, in its workflow file on the default branch, which
+  an `issues` event runs: an issue or a pull request cannot change it. It is not the model's.
+- **What it gets.** No secret and no token: the step has no `env` but the command itself, and the
+  Claude token appears only in the model step that follows. It can write `$GITHUB_PATH` and
+  `$GITHUB_ENV` to leave tools on the path for the steps after it.
+- **How it is handed over.** Through an environment variable, never expanded into the script's
+  text, so a command with a quote in it is a command, not a way out of one. A test checks the
+  input appears in exactly two places in each job: the `if:` and that `env:`.
+- **Where it runs.** Only the two jobs that run the model; the report, review, finish and failure
+  jobs have no use for it and do not run it.
+
+It is not a sandbox: the command and the model's test command run on the same runner, as in the
+repository's own CI, and the model's commands are limited by the allowlist, not by this step.
+
 ## A reusable workflow
 
 A repository's workflow is now short: the trigger, one job that calls
